@@ -1,0 +1,30 @@
+{application, fubar,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [kernel, stdlib]},
+  {mod, {fubar_app, []}},
+  {env, [
+         {fubar, [
+                  {log_dir, "priv/log"},
+                  {log_max_bytes, 10485760},
+                  {log_max_files, 10}
+                 ]},
+         {fubar_app, [
+                      {role, master},
+                      % {role, {slave, 'MasterNode'}},
+                      {acceptors, 4},
+                      {port, 1883}
+                     ]},
+         {mqtt_protocol, [
+                          {max_packet_size, 4096},
+                          {dispatch, mqtt_server}
+                         ]},
+         {mqtt_server, [
+                        {timeout, 10000},
+                        {max_jobs, 100}
+                       ]}
+        ]}
+ ]
+}.
