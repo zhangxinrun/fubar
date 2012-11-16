@@ -33,7 +33,7 @@
 					   will_topic :: undefined | binary(),
 					   will_message :: undefined | binary(),
 					   clean_session = false,
-					   keep_alive = infinity :: pos_integer() | infinity,
+					   keep_alive = 600 :: pos_integer() | infinity,
 					   client_id = <<>> :: binary(),
 					   extra = <<>> :: binary()}).
 
