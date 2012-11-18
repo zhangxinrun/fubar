@@ -41,7 +41,7 @@ boot() ->
 		{aborted, {already_exists, ?MODULE}} ->
 			ok
 	end,
-	mnesia:wait_for_tables([?MODULE], 10000),
+	ok = mnesia:wait_for_tables([?MODULE], 10000),
 	?INFO({"table loaded", ?MODULE}).
 
 %% @doc Slave mode bootstrap logic.

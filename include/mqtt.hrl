@@ -67,12 +67,13 @@
 						 extra = <<>> :: binary()}).
 
 -record(mqtt_suback, {message_id :: pos_integer(),
-					  qoss = [] :: [mqtt_qos()]}).
+					  qoss = [] :: [mqtt_qos()],
+					  extra = <<>> :: binary()}).
 
 -record(mqtt_unsubscribe, {message_id :: pos_integer(),
 						   topics = [] :: [binary()],
 						   dup = false :: boolean(),
-						   qos = at_most_once :: mqtt_qos(),
+						   qos = at_least_once :: mqtt_qos(),
 						   extra = <<>> :: binary()}).
 
 -record(mqtt_unsuback, {message_id :: pos_integer(),

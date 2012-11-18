@@ -3,7 +3,6 @@
 %%%
 %%% Description : MQTT protocol parser.
 %%%               Used as a protocol handler in ranch:start_listener/6.
-%%%               Refer ppcm_app.erl
 %%%               This module does syntactic tasks only.
 %%%               No automatic reply to any MQTT message.
 %%%               All the behaviors must be implemented in dispatchers. 
@@ -39,7 +38,7 @@
 				header,
 				buffer = <<>> :: binary(),
 				dispatch :: module(),
-				context :: any(),
+				context = [] :: any(),
 				timeout :: timeout()}).
 
 %%
@@ -61,10 +60,9 @@ start(Props) ->
 		  {ok, pid()} | {error, reason()}.
 start_link(Listener, Socket, Transport, Options) ->
 	% Apply settings from the application metadata.
-	Settings = ppcm_util:settings(?MODULE),
+	Settings = fubar:settings(?MODULE),
 	State = ?PROPS_TO_RECORD(Settings ++ Options, ?MODULE),
-	gen_server:start_link(?MODULE, State#?MODULE{listener=Listener, socket=Socket,
-											   transport=Transport, context=Settings}, []).
+	gen_server:start_link(?MODULE, State#?MODULE{listener=Listener, socket=Socket, transport=Transport}, []).
 
 %% @doc Stop the process.
 -spec stop(pid()) -> ok | {error, reason()}.

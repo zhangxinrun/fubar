@@ -42,7 +42,8 @@ boot() ->
 	?INFO({"created a schema on", node()}),
 	ok = application:start(mnesia),
 	fubar_route:boot(),
-	mqtt_account:boot().
+	mqtt_account:boot(),
+	mqtt_topic:boot().
 
 %% @doc Slave mode bootstrap logic.
 cluster(MasterNode) ->
@@ -52,7 +53,8 @@ cluster(MasterNode) ->
 	{atomic, ok} = mnesia:change_table_copy_type(schema, node(), disc_copies),
 	?INFO({"clustered with", MasterNode}),
 	fubar_route:cluster(MasterNode),
-	mqtt_account:cluster(MasterNode).
+	mqtt_account:cluster(MasterNode),
+	mqtt_topic:cluster(MasterNode).
 
 %%
 %% Application callbacks

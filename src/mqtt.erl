@@ -20,7 +20,7 @@
 %%
 -export([connect/1, connack/1, publish/1, puback/1, pubrec/1, pubrel/1, pubcomp/1,
 		 subscribe/1, suback/1, unsubscribe/1, unsuback/1, pingreq/1, pingresp/1, disconnect/1,
-		 message_id/1, set_dup/1, is_same/2]).
+		 message_id/1, set_dup/1, is_same/2, degrade/2]).
 
 -spec connect(proplist(atom(), term())) -> #mqtt_connect{}.
 connect(Props) ->
@@ -131,3 +131,15 @@ is_same(#mqtt_unsuback{message_id=MessageId}, #mqtt_unsuback{message_id=MessageI
 	true;
 is_same(_, _) ->
 	false.
+
+-spec degrade(mqtt_qos(), mqtt_qos()) -> mqtt_qos().
+degrade(exactly_once, exactly_once) ->
+	exactly_once;
+degrade(exactly_once, at_least_once) ->
+	at_least_once;
+degrade(at_least_once, exactly_once) ->
+	at_least_once;
+degrade(at_least_once, at_least_once) ->
+	at_least_once;
+degrade(_, _) ->
+	at_most_once.

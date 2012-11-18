@@ -20,13 +20,15 @@
 
 %% @doc Routing table schema
 -record(?MODULE, {name = '_' :: term(),
-				  addr = '_' :: pid()}).
+				  addr = '_' :: pid(),
+				  module = '_' :: module()}).
 
 %%
 %% Exports
 %%
--export([boot/0, cluster/1, resolve/1, up/1, down/1]).
+-export([boot/0, cluster/1, resolve/1, ensure/2, up/2, down/1]).
 
+%% @doc Master mode bootstrap logic.
 boot() ->
 	case mnesia:create_table(?MODULE, [{attributes, record_info(fields, ?MODULE)},
 									   {disc_copies, [node()]}, {type, set}]) of
@@ -36,7 +38,7 @@ boot() ->
 		{aborted, {already_exists, ?MODULE}} ->
 			ok
 	end,
-	mnesia:wait_for_tables([?MODULE], 10000),
+	ok = mnesia:wait_for_tables([?MODULE], 10000),
 	?INFO({"table loaded", ?MODULE}).
 
 %% @doc Slave mode bootstrap logic.
@@ -45,30 +47,61 @@ cluster(_MasterNode) ->
 	?INFO({"table replicated", ?MODULE}).
 
 %% @doc Resovle given name into address.
--spec resolve(term()) -> {ok, pid()} | {error, reason()}.
+-spec resolve(term()) -> {ok, {pid(), module()}} | {error, reason()}.
 resolve(Name) ->
 	% @todo implement remoting
 	case catch mnesia:dirty_read(?MODULE, Name) of
-		[#?MODULE{name=Name, addr=Addr}] ->
-			{ok, Addr};
+		[#?MODULE{name=Name, addr=undefined, module=Module}] ->
+			{ok, {undefined, Module}};
+		[Route=#?MODULE{name=Name, addr=Addr, module=Module}] ->
+			case is_process_alive(Addr) of
+				true ->
+					{ok, {Addr, Module}};
+				_ ->
+					easy_write(Route#?MODULE{addr=undefined}),
+					{ok, {undefined, Module}}
+			end;
 		[] ->
 			{error, not_found};
 		Error ->
 			{error, Error}
 	end.
 
-%% @doc Update route with fresh name and address.
--spec up(term()) -> ok | {error, reason()}.
-up(Name) ->
-	Pid = self(),
-	Route = #?MODULE{name=Name, addr=Pid},
+%% @doc Ensure given name exists.
+-spec ensure(term(), module()) -> {ok, pid()} | {error, reason()}.
+ensure(Name, Module) ->
 	case catch mnesia:dirty_read(?MODULE, Name) of
-		[#?MODULE{name=Name, addr=Addr}] when Addr =:= Pid ->
+		[#?MODULE{name=Name, addr=Addr, module=Module}] ->
+			case is_process_alive(Addr) of
+				true -> {ok, Addr};
+				_ -> Module:start([{name, Name}])
+			end;
+		[#?MODULE{name=Name}] ->
+			{error, collision};
+		[] ->
+			Module:start([{name, Name}]);
+		Error ->
+			{error, Error}
+	end.
+
+%% @doc Update route with fresh name and address.
+-spec up(term(), module()) -> ok | {error, reason()}.
+up(Name, Module) ->
+	Pid = self(),
+	Route = #?MODULE{name=Name, addr=Pid, module=Module},
+	case catch mnesia:dirty_read(?MODULE, Name) of
+		[#?MODULE{name=Name, addr=Pid}] ->
 			% Ignore duplicate up call.
 			ok;
-		[#?MODULE{name=Name, addr=Addr}] ->
+		[#?MODULE{name=Name, addr=undefined, module=Module}] ->
+			easy_write(Route);
+		[#?MODULE{name=Name, addr=Addr, module=Module}] ->
+			% Oust old one.
 			exit(Addr, kill),
 			easy_write(Route);
+		[#?MODULE{name=Name}] ->
+			% Occupied by different module.
+			{error, collision};
 		[] ->
 			easy_write(Route);
 		Error ->
@@ -78,7 +111,14 @@ up(Name) ->
 %% @doc Update route with stale name and address.
 -spec down(term()) -> ok | {error, reason()}.
 down(Name) ->
-	mnesia:dirty_delete(?MODULE, Name).
+	case catch mnesia:dirty_read(?MODULE, Name) of
+		[Route] ->
+			easy_write(Route#?MODULE{addr=undefined});
+		[] ->
+			{error, not_found};
+		Error ->
+			{error, Error}
+	end.
 
 %%
 %% Local

@@ -1,7 +1,7 @@
 %%% -------------------------------------------------------------------
 %%% Author  : Sungjin Park <jinni.park@sk.com>
 %%%
-%%% Description : MQTT tty client prints messages received to tty.
+%%% Description : MQTT tty client prints messages to error_logger.
 %%%
 %%% Created : Nov 15, 2012
 %%% -------------------------------------------------------------------
@@ -23,8 +23,6 @@
 %%
 %% Macros, records and types
 %%
--define(TIMEOUT, 30000).
-
 -type timer() :: term().
 
 -record(?MODULE, {client_id :: binary(),
@@ -35,10 +33,11 @@
 				timer :: timer(),
 				state = connecting :: connecting | connected | disconnecting,
 				message_id = 0 :: integer(),
-				transactions = [] :: [{integer(), mqtt_message(), integer(), timer()}],
-				max_retries = 3 :: integer,
+				retry_pool = [] :: [{integer(), mqtt_message(), integer(), timer()}],
+				max_retries = 3 :: integer(),
 				retry_after = 10000 :: timeout(),
-				recbuf = [] :: [{integer(), mqtt_message(), integer(), timer()}]}).
+				wait_buffer = [] :: [{integer(), mqtt_message()}],
+				max_waits = 10 :: integer()}).
 
 -type state() :: #?MODULE{}.
 -type event() :: any().
@@ -90,7 +89,6 @@ state(Client) ->
 		  {noreply, state(), timeout()} |
 		  {stop, reason()}.
 init(Props) ->
-	?DEBUG([init, Props]),
 	State = ?PROPS_TO_RECORD(Props, ?MODULE),
 	% Setting timeout is default for ping.
 	% Set timestamp as now() and timeout to reset next ping schedule.
@@ -132,102 +130,96 @@ handle_message(Message, State=#?MODULE{client_id=ClientId, state=disconnecting})
 handle_message(#mqtt_pingresp{}, State) ->
 	% Cancel expiration schedule if there is one.
 	timer:cancel(State#?MODULE.timer),
-	?DEBUG([State#?MODULE.client_id, "<= PINGRESP"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_suback{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
 	timer:cancel(State#?MODULE.timer),
-	% Release the subscribe transaction.
-	case lists:keytake(MessageId, 1, State#?MODULE.transactions) of
+	% Subscribe complete.  Stop retrying.
+	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?INFO([ClientId, "<=", Message, "for", Request, "transaction complete"]),
+			?INFO([ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
-			{noreply, State#?MODULE{timestamp=now(), transactions=Rest}, State#?MODULE.timeout};
+			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "transaction not found"]),
+			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
-handle_message(Message=#mqtt_publish{message_id=MessageId, dup=false}, State=#?MODULE{client_id=ClientId}) ->
+handle_message(Message=#mqtt_publish{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
 	timer:cancel(State#?MODULE.timer),
 	% This is the very point to print a message received.
-	?INFO([ClientId, "<=", Message]),
 	case Message#mqtt_publish.qos of
 		exactly_once ->
 			% Transaction via 3-way handshake.
 			Reply = #mqtt_pubrec{message_id=MessageId},
-			{ok, Timer} = timer:send_after(State#?MODULE.retry_after*State#?MODULE.max_retries, {retry, MessageId}),
-			Recbuf = [{MessageId, Reply, State#?MODULE.max_retries, Timer} | State#?MODULE.recbuf],
-			?DEBUG([ClientId, "=>", Reply, "transaction start"]),
-			{reply, Reply, State#?MODULE{timestamp=now(), recbuf=Recbuf}, State#?MODULE.timeout};
+			case Message#mqtt_publish.dup of
+				true ->
+					case lists:keyfind(MessageId, 1, State#?MODULE.wait_buffer) of
+						false ->
+							% Not likely but may have missed original.
+							Buffer = lists:sublist([{MessageId, Message} | State#?MODULE.wait_buffer], State#?MODULE.max_waits),
+							{reply, Reply, State#?MODULE{timestamp=now(), wait_buffer=Buffer}, State#?MODULE.timeout};
+						{MessageId, _} ->
+							{reply, Reply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
+					end;
+				_ ->
+					Buffer = lists:sublist([{MessageId, Message} | State#?MODULE.wait_buffer], State#?MODULE.max_waits),
+					{reply, Reply, State#?MODULE{timestamp=now(), wait_buffer=Buffer}, State#?MODULE.timeout}
+			end;
 		at_least_once ->
 			% Transaction via 1-way handshake.
+			?INFO([ClientId, "<=", Message]),
 			{reply, #mqtt_puback{message_id=MessageId}, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 		_ ->
-			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
-	end;
-handle_message(Message=#mqtt_publish{message_id=MessageId}, State) ->
-	timer:cancel(State#?MODULE.timer),
-	% Duplicate message.  Check receive buffer.
-	case lists:keyfind(MessageId, 1, State#?MODULE.recbuf) of
-		false ->
-			% Not found.  Treate it as a new message.
-			handle_message(Message#mqtt_publish{dup=false}, State);
-		_ ->
-			% Otherwise, just ignore it.
-			?DEBUG([State#?MODULE.client_id, "<=", Message, "dropping duplicate"]),
+			?INFO([ClientId, "<=", Message]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_puback{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
 	timer:cancel(State#?MODULE.timer),
 	% Complete a 1-way handshake transaction.
-	case lists:keytake(MessageId, 1, State#?MODULE.transactions) of
+	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?INFO([ClientId, "<=", Message, "for", Request, "transaction complete"]),
+			?INFO([ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
-			{noreply, State#?MODULE{timestamp=now(), transactions=Rest}, State#?MODULE.timeout};
+			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "transaction not found"]),
+			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
 	timer:cancel(State#?MODULE.timer),
 	% Commit a 3-way handshake transaction.
-	case lists:keytake(MessageId, 1, State#?MODULE.transactions) of
+	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?DEBUG([ClientId, "<=", Message, "for", Request, "transaction ready"]),
 			timer:cancel(Timer),
 			Reply = #mqtt_pubrel{message_id=MessageId},
-			{ok, Timer} = timer:send_after(State#?MODULE.retry_after*State#?MODULE.max_retries, {retry, MessageId}),
-			Pool = [{MessageId, Reply, State#?MODULE.max_retries, Timer} | Rest],
-			?DEBUG([ClientId, "=>", Reply, "for", Message, "transaction commit"]),
-			{reply, Reply, State#?MODULE{timestamp=now(), transactions=Pool}, State#?MODULE.timeout};
+			{ok, NewTimer} = timer:send_after(State#?MODULE.retry_after*State#?MODULE.max_retries, {retry, MessageId}),
+			Pool = [{MessageId, Request, State#?MODULE.max_retries, NewTimer} | Rest],
+			{reply, Reply, State#?MODULE{timestamp=now(), retry_pool=Pool}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "transaction not found"]),
+			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_pubrel{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
 	timer:cancel(State#?MODULE.timer),
 	% Complete a server-driven 3-way handshake transaction.
-	case lists:keytake(MessageId, 1, State#?MODULE.recbuf) of
-		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?DEBUG([ClientId, "<=", Message, "for", Request, "transaction fire"]),
-			timer:cancel(Timer),
+	case lists:keytake(MessageId, 1, State#?MODULE.wait_buffer) of
+		{value, {MessageId, Request}, Rest} ->
+			?INFO([ClientId, "<=", Request]),
 			Reply = #mqtt_pubcomp{message_id=MessageId},
-			?DEBUG([ClientId, "=>", Reply, "for", Message]),
-			{reply, Reply, State#?MODULE{timestamp=now(), recbuf=Rest}, State#?MODULE.timeout};
+			{reply, Reply, State#?MODULE{timestamp=now(), wait_buffer=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "transaction not found"]),
+			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
 	timer:cancel(State#?MODULE.timer),
 	% Complete a 3-way handshake transaction.
-	case lists:keytake(MessageId, 1, State#?MODULE.transactions) of
+	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?INFO([ClientId, "<=", Message, "for", Request, "transaction complete"]),
+			?INFO([ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
-			{noreply, State#?MODULE{timestamp=now(), transactions=Rest}, State#?MODULE.timeout};
+			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "transaction not found"]),
+			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message, State) ->
@@ -269,14 +261,12 @@ handle_event(Event, State=#?MODULE{client_id=ClientId, state=connecting}) ->
 	?WARNING([ClientId, Event, "not connected yet, dropping"]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
 handle_event(timeout, State) ->
-	?DEBUG([State#?MODULE.client_id, "=> PINGREQ"]),
 	{ok, Timer} = timer:send_after(State#?MODULE.retry_after, no_pingresp),
 	{reply, #mqtt_pingreq{}, State#?MODULE{timestamp=now(), timer=Timer}, State#?MODULE.timeout};
 handle_event(no_pingresp, State=#?MODULE{client_id=ClientId}) ->
 	?WARNING([ClientId, "PINGREQ timed out"]),
 	{stop, no_pingresp, State};
 handle_event(Event=#mqtt_subscribe{}, State) ->
-	?DEBUG([State#?MODULE.client_id, "=>", Event]),
 	case Event#mqtt_subscribe.qos of
 		at_most_once ->
 			% This is out of spec. but trying.  Why not?
@@ -287,12 +277,11 @@ handle_event(Event=#mqtt_subscribe{}, State) ->
 			Message = Event#mqtt_subscribe{message_id=MessageId, qos=at_least_once},
 			Dup = Message#mqtt_subscribe{dup=true},
 			{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
-			Pool = [{MessageId, Dup, 1, Timer} | State#?MODULE.transactions],
+			Pool = [{MessageId, Dup, 1, Timer} | State#?MODULE.retry_pool],
 			{reply, Message,
-			 State#?MODULE{timestamp=now(), message_id=MessageId, transactions=Pool}, State#?MODULE.timeout}
+			 State#?MODULE{timestamp=now(), message_id=MessageId, retry_pool=Pool}, State#?MODULE.timeout}
 	end;
 handle_event(Event=#mqtt_publish{}, State) ->
-	?DEBUG([State#?MODULE.client_id, "=>", Event]),
 	case Event#mqtt_publish.qos of
 		at_most_once ->
 			timer:cancel(State#?MODULE.timer),
@@ -302,28 +291,26 @@ handle_event(Event=#mqtt_publish{}, State) ->
 			Message = Event#mqtt_publish{message_id=MessageId},
 			Dup = Message#mqtt_publish{dup=true},
 			{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
-			Pool = [{MessageId, Dup, 1, Timer} | State#?MODULE.transactions],
+			Pool = [{MessageId, Dup, 1, Timer} | State#?MODULE.retry_pool],
 			{reply, Message,
-			 State#?MODULE{timestamp=now(), message_id=MessageId, transactions=Pool}, State#?MODULE.timeout}
+			 State#?MODULE{timestamp=now(), message_id=MessageId, retry_pool=Pool}, State#?MODULE.timeout}
 	end;
 handle_event(Event=#mqtt_disconnect{}, State) ->
-	?DEBUG([State#?MODULE.client_id, "=> DISCONNECT"]),
 	{reply, Event, State#?MODULE{state=disconnecting, timestamp=now(), timeout=0}, 0};
 handle_event({retry, MessageId}, State=#?MODULE{client_id=ClientId}) ->
-	case lists:keytake(MessageId, 1, State#?MODULE.transactions) of
+	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Message, Retry, _}, Rest} ->
 			case Retry < State#?MODULE.max_retries of
 				true ->
-					?DEBUG([ClientId, "=>", Message, "retry", Retry]),
 					{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
 					Pool = [{MessageId, Message, Retry+1, Timer}| Rest],
-					{reply, Message, State#?MODULE{timestamp=now(), transactions=Pool}, State#?MODULE.timeout};
+					{reply, Message, State#?MODULE{timestamp=now(), retry_pool=Pool}, State#?MODULE.timeout};
 				_ ->
-					?WARNING([ClientId, "=>", Message, "dropping after retry", Retry]),
-					{noreply, State#?MODULE{transactions=Rest}, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}
+					?WARNING([ClientId, "=/=", Message, "dropping after retry", Retry]),
+					{noreply, State#?MODULE{retry_pool=Rest}, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}
 			end;
 		_ ->
-			?ERROR([ClientId, MessageId, "not found in transactions"]),
+			?ERROR([ClientId, MessageId, "not found in retry pool"]),
 			{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}
 	end;
 handle_event(Event, State) ->

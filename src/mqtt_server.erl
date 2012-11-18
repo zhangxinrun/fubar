@@ -1,7 +1,7 @@
 %%% -------------------------------------------------------------------
 %%% Author  : Sungjin Park <jinni.park@sk.com>
 %%%
-%%% Description : MQTT server for ppcm.
+%%% Description : MQTT server for fubar.
 %%%               Used as a dispatcher in ranch:start_listener/6.
 %%%               The dispatcher callback is invoked by the protocol
 %%%               handler, which is mqtt_protocol.
@@ -19,23 +19,18 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-include("fubar.hrl").
 -include("mqtt.hrl").
 -include("log.hrl").
 -include("props_to_record.hrl").
--include("fubar.hrl").
 
 %%
 %% Types and records
 %%
--record(?MODULE, {session :: pid(),
+-record(?MODULE, {client_id :: binary(),
+				session :: pid(),
 				timeout = 10000 :: timeout(),
-				client_id :: binary(),
-				buffer = [] :: [{mqtt_message(), pid()}],
-				jobs = 0 :: integer(),
-				max_jobs = 10 :: integer(),
-				history = [] :: [{mqtt_message(), mqtt_message()}],
-				histories = 0 :: integer(),
-				max_histories = 10 :: integer()}).
+				timestamp :: timestamp()}).
 
 -type state() :: #?MODULE{}.
 -type event() :: any().
@@ -61,7 +56,7 @@ init(Props) ->
 	?DEBUG([init, Settings]),
 	State = ?PROPS_TO_RECORD(Settings, ?MODULE),
 	% Don't respond anything against tcp connection and apply small initial timeout.
-	{noreply, State, State#?MODULE.timeout}.
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
 
 %% @doc Handle MQTT messages.
 %% This is called when an MQTT message arrives.
@@ -71,15 +66,14 @@ init(Props) ->
 		  {noreply, state(), timeout()} |
 		  {stop, reason(), state()}.
 handle_message(#mqtt_connect{username=undefined}, State=#?MODULE{session=undefined}) ->
-	?WARNING("CONNECT without credential"),
+	?WARNING([State#?MODULE.client_id, "CONNECT without credential"]),
 	% Give another chance to connect with right credential again.
-	{reply, mqtt:connack([{code, unauthorized}]), State, State#?MODULE.timeout};
-handle_message(Message = #mqtt_connect{username=Username, client_id=ClientId},
-			   State=#?MODULE{session=undefined}) ->
+	{reply, mqtt:connack([{code, unauthorized}]), State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
+handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username}, State=#?MODULE{session=undefined}) ->
 	% Connection with credential.
 	case mqtt_account:verify(Username, Message#mqtt_connect.password) of
 		ok ->
-			?DEBUG(["CONNECT accepted", Username, ClientId]),
+			?DEBUG([ClientId, "=> CONNECT accepted", Username]),
 			% The client is authorized.
 			% Now bind with the session or create a new one.
 			% Once bound, the session will detect process termination.
@@ -89,57 +83,72 @@ handle_message(Message = #mqtt_connect{username=Username, client_id=ClientId},
 						   Topic -> [{will, {Topic, Message#mqtt_connect.will_message,
 											 Message#mqtt_connect.will_qos, Message#mqtt_connect.will_retain}}]
 				   end,
-			case fubar_session:bind(ClientId, [{clean_session, Message#mqtt_connect.clean_session} | Will]) of
+			case mqtt_session:bind(ClientId, [{clean_session, Message#mqtt_connect.clean_session} | Will]) of
 				{ok, Session} ->
 					Timeout = case Message#mqtt_connect.keep_alive of
 								  infinity -> infinity;
 								  KeepAlive -> KeepAlive*2000
 							  end,
 					{reply, mqtt:connack([{code, accepted}]),
-					 State#?MODULE{client_id=ClientId, timeout=Timeout, session=Session}, Timeout};
+					 State#?MODULE{client_id=ClientId, session=Session, timeout=Timeout, timestamp=now()}, Timeout};
 				Error ->
-					?ERROR(["session bind failure", Error, ClientId]),
+					?ERROR([ClientId, Error, "session bind failure"]),
 					% Timeout immediately to close just after reply.
 					{reply, mqtt:connack([{code, unavailable}]), State, 0}
 			end;
 		{error, not_found} ->
-			?WARNING(["CONNECT with unknown username", Username]),
-			{reply, mqtt:connack([{code, id_rejected}]), State, 0};
+			?WARNING([ClientId, "=> CONNECT not found", Username]),
+			{reply, mqtt:connack([{code, id_rejected}]), State#?MODULE{timestamp=now()}, 0};
 		{error, forbidden} ->
-			?WARNING(["CONNECT with bad credential", Username]),
-			{reply, mqtt:connack([{code, forbidden}]), State, 0};
+			?WARNING([ClientId, "=> CONNECT forbidden", Username]),
+			{reply, mqtt:connack([{code, forbidden}]), State#?MODULE{timestamp=now()}, 0};
 		Error ->
-			?ERROR(["account error", Error, Username]),
-			{reply, mqtt:connack([{code, unavailable}]), State, 0}
+			?ERROR([ClientId, "=> CONNECT error", Error, Username]),
+			{reply, mqtt:connack([{code, unavailable}]), State#?MODULE{timestamp=now()}, 0}
 	end;
 handle_message(#mqtt_disconnect{}, State) ->
-	?DEBUG(["DISCONNECT", State#?MODULE.client_id]),
-	{stop, normal, State};
+	?DEBUG([State#?MODULE.client_id, "=> DISCONNECT"]),
+	{stop, normal, State#?MODULE{timestamp=now()}};
 handle_message(Message, State=#?MODULE{session=undefined}) ->
 	% All the other messages are not allowed without session.
-	?ERROR(["unexpected message before session binding", Message, State]),
-	{stop, normal, State};
+	?ERROR([State#?MODULE.client_id, "=>", Message, "dropping sessionless message"]),
+	{stop, normal, State#?MODULE{timestamp=now()}};
 handle_message(#mqtt_pingreq{}, State) ->
 	% Reflect ping and refresh timeout.
-	{reply, #mqtt_pingresp{}, State, State#?MODULE.timeout};
-handle_message(Message=#mqtt_publish{dup=true}, State) ->
-	handle_dup_message(Message, State);
-handle_message(#mqtt_publish{}, State) ->
-	?DEBUG(["PUBLISH", State#?MODULE.client_id]),
-	{noreply, State, State#?MODULE.timeout};
-handle_message(Message=#mqtt_subscribe{dup=true}, State) ->
-	handle_dup_message(Message, State);
-handle_message(#mqtt_subscribe{}, State) ->
-	?DEBUG(["SUBSCRIBE", State#?MODULE.client_id]),
-	{noreply, State, State#?MODULE.timeout};
-handle_message(Message=#mqtt_unsubscribe{dup=true}, State) ->
-	handle_dup_message(Message, State);
-handle_message(#mqtt_unsubscribe{}, State) ->
-	?DEBUG(["UNSUBSCRIBE", State#?MODULE.client_id]),
-	{noreply, State, State#?MODULE.timeout};
+	?DEBUG([State#?MODULE.client_id, "=> PINGREQ"]),
+	?DEBUG([State#?MODULE.client_id, "<= PINGRESP"]),
+	{reply, #mqtt_pingresp{}, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_publish{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_puback{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_pubrec{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_pubrel{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_pubcomp{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_subscribe{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_unsubscribe{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message, State) ->
-	?ERROR(["bad message", Message, State]),
-	{stop, normal, State}.
+	?WARNING([State#?MODULE.client_id, "=>", Message, "dropping unknown message"]),
+	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
 
 %% @doc Handle internal events from, supposedly, the session.
 -spec handle_event(event(), state()) ->
@@ -147,49 +156,54 @@ handle_message(Message, State) ->
 		  {reply_later, mqtt_message(), state(), timeout()} |
 		  {noreply, state(), timeout()} |
 		  {stop, reason(), state()}.
-handle_event(Fubar=#fubar{}, State) ->
-	% Need to forward as a PUBLISH to the peer.
-	fubar:profile(?MODULE, Fubar),
-	{noreply, State, State#?MODULE.timeout};
 handle_event(timeout, State) ->
 	% General timeout
-	?WARNING(["NO PINGREQ timeout", State#?MODULE.client_id]),
+	?WARNING([State#?MODULE.client_id, "timed out"]),
 	{stop, normal, State};
+handle_event(Event, State=#?MODULE{session=undefined}) ->
+	?WARNING([State#?MODULE.client_id, Event, "dropping sessionless event"]),
+	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
+handle_event(Event=#mqtt_publish{}, State) ->
+	?DEBUG([State#?MODULE.client_id, "<=", Event]),
+	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_event(Event=#mqtt_puback{}, State) ->
+	?DEBUG([State#?MODULE.client_id, "<=", Event]),
+	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_event(Event=#mqtt_pubrec{}, State) ->
+	?DEBUG([State#?MODULE.client_id, "<=", Event]),
+	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_event(Event=#mqtt_pubrel{}, State) ->
+	?DEBUG([State#?MODULE.client_id, "<=", Event]),
+	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_event(Event=#mqtt_pubcomp{}, State) ->
+	?DEBUG([State#?MODULE.client_id, "<=", Event]),
+	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_event(Event=#mqtt_suback{}, State) ->
+	?DEBUG([State#?MODULE.client_id, "<=", Event]),
+	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_event(Event=#mqtt_unsuback{}, State) ->
+	?DEBUG([State#?MODULE.client_id, "<=", Event]),
+	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_event(Event, State) ->
-	?WARNING(["ignoring unknown event", Event, State]),
-	{noreply, State, State#?MODULE.timeout}.
+	?DEBUG([State#?MODULE.client_id, Event, "dropping unknown event"]),
+	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}.
 
 %% @doc Finalize the server process.
 -spec terminate(state()) -> ok.
 terminate(State) ->
 	?DEBUG([terminate, State]),
-	fubar_session:unbind(State#?MODULE.session).
+	State.
 
 %%
 %% Local Functions
 %%
-handle_dup_message(Message, State=#?MODULE{history=History}) ->
-	?DEBUG(["DUP", Message]),
-	% Duplicate messages can be handled autonomously.
-	% Search for corresponding response in history.
-	Pred = fun(Request) -> mqtt:is_same(Message, Request) end,
-	case keyfind_first_if(Pred, 1, History) of
-		{ok, {_, Reply}} ->
-			% There is one.  Reply it.
-			{reply, Reply, State, State#?MODULE.timeout};
-		_ ->
-			% Not found.  Just drop it.
-			{noreply, State, State#?MODULE.timeout}
-	end.
-
-keyfind_first_if(_, _, []) ->
-	{error, not_found};
-keyfind_first_if(Pred, N, [H | T]) ->
-	case Pred(lists:nth(N, tuple_to_list(H))) of
-		true ->
-			{ok, H};
-		_ ->
-			keyfind_first_if(Pred, N, T)
+timeout(infinity, _) ->
+	infinity;
+timeout(Milliseconds, Timestamp) ->
+	Elapsed = timer:now_diff(now(), Timestamp) div 1000,
+	case Milliseconds > Elapsed of
+		true -> Milliseconds - Elapsed;
+		_ -> 0
 	end.
 
 %%
