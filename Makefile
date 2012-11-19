@@ -45,7 +45,7 @@ clean: delete-deps
 
 # Clear the runtime.
 reset:
-	rm -rf priv/data/*
+	rm -rf priv/data/$(node)
 
 # Generate documents.
 doc:

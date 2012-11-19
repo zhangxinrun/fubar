@@ -55,12 +55,11 @@ cluster(_MasterNode) ->
 %% @doc Resovle given name into address.
 -spec resolve(term()) -> {ok, {pid(), module()}} | {error, reason()}.
 resolve(Name) ->
-	% @todo implement remoting
 	case catch mnesia:dirty_read(?MODULE, Name) of
 		[#?MODULE{name=Name, addr=undefined, module=Module}] ->
 			{ok, {undefined, Module}};
 		[Route=#?MODULE{name=Name, addr=Addr, module=Module}] ->
-			case is_process_alive(Addr) of
+			case check_process(Addr) of
 				true ->
 					{ok, {Addr, Module}};
 				_ ->
@@ -78,7 +77,7 @@ resolve(Name) ->
 ensure(Name, Module) ->
 	case catch mnesia:dirty_read(?MODULE, Name) of
 		[#?MODULE{name=Name, addr=Addr, module=Module}] ->
-			case is_process_alive(Addr) of
+			case check_process(Addr) of
 				true -> {ok, Addr};
 				_ -> Module:start([{name, Name}])
 			end;
@@ -130,6 +129,17 @@ easy_write(Record) ->
 	case catch mnesia:dirty_write(Record) of
 		{atomic, ok} -> ok;
 		Error -> {error, Error}
+	end.
+
+check_process(undefined) ->
+	false;
+check_process(Pid) ->
+	Local = node(),
+	case node(Pid) of
+		Local -> % local process
+			is_process_alive(Pid);
+		Remote -> % remote process
+			rpc:call(Remote, erlang, is_process_alive, [Pid])
 	end.
 
 %%

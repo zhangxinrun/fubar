@@ -52,7 +52,8 @@
 %% @doc Master mode bootstrap logic.
 boot() ->
 	case mnesia:create_table(mqtt_subscriber, [{attributes, record_info(fields, mqtt_subscriber)},
-											   {disc_copies, [node()]}, {type, bag}, {index, [client_id]}]) of
+											   {disc_copies, [node()]}, {type, bag},
+											   {index, [client_id]}, {local_content, true}]) of
 		{atomic, ok} ->
 			?INFO({"table created", mqtt_subscriber}),
 			ok;
@@ -60,7 +61,8 @@ boot() ->
 			ok
 	end,
 	case mnesia:create_table(mqtt_retained, [{attributes, record_info(fields, mqtt_retained)},
-											 {disc_copies, [node()]}, {type, set}]) of
+											 {disc_copies, [node()]}, {type, set},
+											 {local_content, true}]) of
 		{atomic, ok} ->
 			?INFO({"table created", mqtt_retained}),
 			ok;
@@ -74,7 +76,7 @@ boot() ->
 cluster(_MasterNode) ->
 	{atomic, ok} = mnesia:add_table_copy(mqtt_subscriber, node(), disc_copies),
 	{atomic, ok} = mnesia:add_table_copy(mqtt_retained, node(), disc_copies),
-	?INFO({"table replicated", [mqtt_subscriber, mqtt_retained]}).
+	?INFO({"table created", [mqtt_subscriber, mqtt_retained]}).
 
 %% @doc Start a topic.
 start(Props) ->

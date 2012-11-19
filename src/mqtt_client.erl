@@ -56,7 +56,7 @@
 %%        clean_session(false)
 -spec start(proplist(atom(), term())) -> pid().
 start(Props) ->
-	{ok, Client} = mqtt_protocol:start([{dispatch, ?MODULE}]),
+	{ok, Client} = mqtt_protocol:start([{dispatch, ?MODULE} | proplists:delete(client_id, Props)]),
 	Client ! mqtt:connect(Props),
 	Client.
 
