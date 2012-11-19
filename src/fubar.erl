@@ -22,10 +22,11 @@
 %%
 %% Exported Functions
 %%
--export([start/0, stop/0, settings/1,	% application start/stop
-		 create/1, set/2, get/2, timestamp/2,	% fubar message handling utility
-		 profile/2,	% logging utility
-		 apply_all_module_attributes_of/1	% bootstrapping utility
+-export([start/0, stop/0,						% application start/stop
+		 settings/1, settings/2,				% application environment getter/setter
+		 create/1, set/2, get/2, timestamp/2,	% fubar message manipulation
+		 profile/2,								% performance logging
+		 apply_all_module_attributes_of/1		% bootstrapping utility
 		]).
 
 -record(settings, {log_dir = "priv/log" :: string(),
@@ -54,7 +55,7 @@ start() ->
 stop() ->
 	application:stop(ranch).
 
-%% @doc Load settings from the application metadata.
+%% @doc Get settings from the application metadata.
 %% @sample Props = fubar:settings(?MODULE).
 -spec settings(module()) -> proplist(atom(), term()).
 settings(Module) ->
@@ -63,8 +64,16 @@ settings(Module) ->
 		_ -> []
 	end.
 
+%% @doc Set settings to the application metadata.
+%%      This operation is not persistent.  Changes get lost when node gets down and up.
+%% @sample fubar:settings(?MODULE, [{key,value}]).
+-spec settings(module(), proplist(atom(), term())) -> ok.
+settings(Module, Props) ->
+	application:set_env(?MODULE, Module, Props).
+		
 %% @doc Create a fubar.
 %%      Refer fubar.hrl for field definition.
+%%      All the timestamps are set as now.
 %% @sample Fubar = fubar:create([{from, "romeo"}, {to, "juliet"}]).
 -spec create(proplist(atom(), term())) -> #fubar{}.
 create(Props) ->
@@ -72,6 +81,7 @@ create(Props) ->
 
 %% @doc Set fields in a fubar.
 %%      Refer fubar.hrl for field definition.
+%%      Timestamps of the changed fields are updated as now.
 %% @sample New = fubar:set([{via, "postman"}], Fubar).
 -spec set(proplist(atom(), term()), #fubar{}) -> #fubar{}.
 set(Props, Fubar=#fubar{}) ->
@@ -142,8 +152,8 @@ profile(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, to={To, T3}, vi
 		   {"since via", Via, timer:now_diff(Now, T4)/1000}]).
 
 %% @doc Get all the attributes of a name in current runtime environment and invoke.
-%% The attributes must be a function form, i.e {M, F, A}, {F, A} or F where M must
-%% be a module name, F must be a function name and A must be a list of arguments.
+%%      The attributes must be a function form, i.e {M, F, A}, {F, A} or F where M must
+%%      be a module name, F must be a function name and A must be a list of arguments.
 apply_all_module_attributes_of({Name, Args}) ->
 	[Result || {Module, Attrs} <- all_module_attributes_of(Name),
 			   Result <- lists:map(fun(Attr) ->

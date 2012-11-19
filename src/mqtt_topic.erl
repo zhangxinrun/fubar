@@ -101,29 +101,10 @@ handle_call(state, _, State) ->
 	{reply, State, State};
 
 %% Publish request.
-handle_call(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, _, State=#?MODULE{name=Name, timeout=Timeout}) ->
-	fubar:profile(Name, Fubar),
-	Fubar1 = fubar:set([{from, Name}, {via, Name}], Fubar),
-	Publish = fubar:get(payload, Fubar1),
-	QoS = Publish#mqtt_publish.qos,
-	F = fun({ClientId, MaxQoS, Pid, Module}) ->
-			Fubar2 = fubar:set([{to, ClientId}, {qos, mqtt:degrade(QoS, MaxQoS)}], Fubar1),
-			case Pid of
-				undefined ->
-					case fubar_route:ensure(ClientId, Module) of
-						{ok, Addr} ->
-							catch gen_server:call(Addr, Fubar2, Timeout),
-							{ClientId, MaxQoS, Addr, Module};
-						_ ->
-							?ERROR([Name, ClientId, "cannot ensure subscriber, something wrong"]),
-							{ClientId, MaxQoS, undefined, Module}
-					end;
-				_ ->
-					catch gen_server:call(Pid, Fubar2, Timeout),
-					{ClientId, MaxQoS, Pid, Module}
-			end
-		end,
-	Subscribers = lists:map(F, State#?MODULE.subscribers),
+handle_call(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, _, State=#?MODULE{name=Name}) ->
+	fubar:profile({Name, publish, sync}, Fubar),
+	{Fubar1, Subscribers} = publish(Name, Fubar, State#?MODULE.subscribers),
+	Publish = fubar:get(payload,Fubar1),
 	case Publish#mqtt_publish.retain of
 		true ->
 			mnesia:dirty_write(#mqtt_retained{topic=Name, fubar=Fubar1}),
@@ -135,7 +116,7 @@ handle_call(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, _, State=#?MODU
 %% Subscribe request from a client session.
 handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MODULE{name=Name}) ->
 	% Check if it's a new subscription or not.
-	fubar:profile(Name, Fubar),
+	fubar:profile({Name, subscribe}, Fubar),
 	Subscribers = case lists:keytake(ClientId, 1, State#?MODULE.subscribers) of
 					  {value, {ClientId, QoS, OldPid, Module}, Rest} ->
 						  % The same subscription from different client.
@@ -171,7 +152,7 @@ handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, Q
 
 %% Unsubscribe request from a client session.
 handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload=unsubscribe}, _, State=#?MODULE{name=Name}) ->
-	fubar:profile(Name, Fubar),
+	fubar:profile({Name, unsubscribe}, Fubar),
 	Subscribers = case lists:keytake(ClientId, 1, State#?MODULE.subscribers) of
 					  {value, {ClientId, _, Pid, _}, Rest} ->
 						  catch unlink(Pid),
@@ -197,28 +178,9 @@ handle_call(Request, From, State) ->
 
 %% Publish request (async version).
 handle_cast(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, State=#?MODULE{name=Name}) ->
-	fubar:profile(Name, Fubar),
-	Fubar1 = fubar:set([{from, Name}, {via, Name}], Fubar),
-	Publish = fubar:get(payload, Fubar1),
-	QoS = Publish#mqtt_publish.qos,
-	F = fun({ClientId, MaxQoS, Pid, Module}) ->
-			Fubar2 = fubar:set([{to, ClientId}, {qos, mqtt:degrade(QoS, MaxQoS)}], Fubar1),
-			case Pid of
-				undefined ->
-					case fubar_route:ensure(ClientId, Module) of
-						{ok, Addr} ->
-							catch gen_server:cast(Addr, Fubar2),
-							{ClientId, MaxQoS, Addr, Module};
-						_ ->
-							?ERROR([Name, ClientId, "cannot ensure subscriber, something wrong"]),
-							{ClientId, MaxQoS, undefined, Module}
-					end;
-				_ ->
-					catch gen_server:cast(Pid, Fubar2),
-					{ClientId, MaxQoS, Pid, Module}
-			end
-		end,
-	Subscribers = lists:map(F, State#?MODULE.subscribers),
+	fubar:profile({Name, publish}, Fubar),
+	{Fubar1, Subscribers} = publish(Name, Fubar, State#?MODULE.subscribers),
+	Publish = fubar:get(payload,Fubar1),
 	case Publish#mqtt_publish.retain of
 		true ->
 			mnesia:dirty_write(#mqtt_retained{topic=Name, fubar=Fubar1}),
@@ -230,7 +192,7 @@ handle_cast(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, State=#?MODULE{
 %% Subscribe request from the client (async version).
 handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, QoS, Module}}, State=#?MODULE{name=Name}) ->
 	% Check if it's a new subscription or not.
-	fubar:profile(Name, Fubar),
+	fubar:profile({Name, subscribe, async}, Fubar),
 	Pid = case fubar_route:resolve(ClientId) of
 			  {ok, {Addr, _}} -> Addr;
 			  _ -> undefined
@@ -270,7 +232,7 @@ handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, Q
 
 %% Unsubscribe request from a client session (async version).
 handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload=unsubscribe}, State=#?MODULE{name=Name}) ->
-	fubar:profile(Name, Fubar),
+	fubar:profile({Name, unsubscribe, async}, Fubar),
 	Subscribers = case lists:keytake(ClientId, 1, State#?MODULE.subscribers) of
 					  {value, {ClientId, _, Pid, _}, Rest} ->
 						  catch unlink(Pid),
@@ -316,6 +278,34 @@ terminate(Reason, #?MODULE{name=Name}) ->
 code_change(OldVsn, State, Extra) ->
 	?WARNING([code_change, OldVsn, State, Extra]),
 	{ok, State}.
+
+%%
+%% Local
+%%
+publish(Name, Fubar, Subscribers) ->
+	Fubar1 = fubar:set([{from, Name}, {via, Name}], Fubar),
+	Publish = fubar:get(payload, Fubar1),
+	QoS = Publish#mqtt_publish.qos,
+	F = fun({ClientId, MaxQoS, Pid, Module}) ->
+			Publish1 = Publish#mqtt_publish{qos=mqtt:degrade(QoS, MaxQoS)},
+			Fubar2 = fubar:set([{to, ClientId}, {payload, Publish1}], Fubar1),
+			case Pid of
+				undefined ->
+					case fubar_route:ensure(ClientId, Module) of
+						{ok, Addr} ->
+							catch gen_server:cast(Addr, Fubar2),
+							{ClientId, MaxQoS, Addr, Module};
+						_ ->
+							?ERROR([Name, ClientId, "cannot ensure subscriber, something wrong"]),
+							{ClientId, MaxQoS, undefined, Module}
+					end;
+				_ ->
+					catch gen_server:cast(Pid, Fubar2),
+					{ClientId, MaxQoS, Pid, Module}
+			end
+		end,
+	Subscribers1 = lists:map(F, Subscribers),
+	{Fubar1, Subscribers1}.
 
 %%
 %% Unit Tests

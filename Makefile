@@ -26,6 +26,10 @@ run: compile
 debug: compile
 	$(ERL) -pa ebin deps/*/ebin -sname debug -remsh $(node)@`hostname -s`
 
+# Launch a shell for client.
+client: compile
+	$(ERL) -pa ebin deps/*/ebin +A 16 +K true +P 1000000 +W w -s reloader
+
 # Make a textual log snapshot.
 log:
 	priv/script/dump-log.escript $(node)-`date "+%Y%m%dT%H%M%S.log"` priv/log/$(node)@`hostname -s`

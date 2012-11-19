@@ -321,14 +321,17 @@ handle_info(Info=#mqtt_unsubscribe{message_id=MessageId, topics=Topics}, State=#
 			lists:keydelete(Topic, 1, Subscriptions)
 		end,
 	{noreply, State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, Topics)}};
-handle_info({'EXIT', Client, Reason}, State=#?MODULE{client=Client}) ->
-	?DEBUG([State#?MODULE.name, Client, Reason, "client down"]),
+handle_info(#mqtt_disconnect{}, State=#?MODULE{client=Client}) ->
+	catch unlink(Client),
 	case State#?MODULE.clean_session of
 		true ->
 			{stop, normal, State#?MODULE{client=undefined}};
 		_ ->
 			{noreply, State#?MODULE{client=undefined}}
 	end;
+handle_info({'EXIT', Client, Reason}, State=#?MODULE{client=Client}) ->
+	?DEBUG([State#?MODULE.name, Client, Reason, "client down"]),
+	{noreply, State#?MODULE{client=undefined}};
 handle_info({'EXIT', Worker, normal}, State=#?MODULE{name=ClientId}) ->
 	% Likely to be a transaction completion signal.
 	case lists:keytake(Worker, 2, State#?MODULE.transactions) of
@@ -359,12 +362,25 @@ handle_info(Info, State) ->
 	?WARNING([State#?MODULE.name, Info, "dropping unknown info"]),
 	{noreply, State}.
 
-terminate(Reason, State=#?MODULE{name=ClientId}) ->
+terminate(Reason, State=#?MODULE{name=ClientId, transaction_timeout=Timeout}) ->
 	?DEBUG([ClientId, Reason, terminate]),
 	MessageId = State#?MODULE.message_id rem 16#ffff + 1,
 	{Topics, _} = lists:unzip(State#?MODULE.subscriptions),
-	do_transaction(ClientId, mqtt:unsubscribe([{message_id, MessageId}, {topics, Topics}]), State#?MODULE.transaction_timeout),
-	% @todo implement will announcement
+	do_transaction(ClientId, mqtt:unsubscribe([{message_id, MessageId}, {topics, Topics}]), Timeout),
+	case State#?MODULE.will of
+		undefined ->
+			ok;
+		{WillTopic, WillMessage, WillQoS, WillRetain} ->
+			NewMessageId = MessageId rem 16#ffff + 1,
+			Message = mqtt:publish([{message_id, NewMessageId}, {topic, WillTopic},
+									{qos, WillQoS}, {retain, WillRetain}, {payload, WillMessage}]),
+			case WillQoS of
+				at_most_once ->
+					do_async_transaction(ClientId, Message);
+				_ ->
+					do_transaction(ClientId, Message, Timeout)
+			end
+	end,
 	fubar_route:down(ClientId).
 
 code_change(OldVsn, State, Extra) ->

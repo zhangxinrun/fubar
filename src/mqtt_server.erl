@@ -106,9 +106,6 @@ handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username}, Sta
 			?ERROR([ClientId, "=> CONNECT error", Error, Username]),
 			{reply, mqtt:connack([{code, unavailable}]), State#?MODULE{timestamp=now()}, 0}
 	end;
-handle_message(#mqtt_disconnect{}, State) ->
-	?DEBUG([State#?MODULE.client_id, "=> DISCONNECT"]),
-	{stop, normal, State#?MODULE{timestamp=now()}};
 handle_message(Message, State=#?MODULE{session=undefined}) ->
 	% All the other messages are not allowed without session.
 	?ERROR([State#?MODULE.client_id, "=>", Message, "dropping sessionless message"]),
@@ -146,6 +143,10 @@ handle_message(Message=#mqtt_unsubscribe{}, State=#?MODULE{session=Session}) ->
 	?DEBUG([State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+handle_message(Message=#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=>", Message]),
+	Session ! Message,
+	{stop, normal, State#?MODULE{timestamp=now()}};
 handle_message(Message, State) ->
 	?WARNING([State#?MODULE.client_id, "=>", Message, "dropping unknown message"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
