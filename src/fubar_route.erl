@@ -1,7 +1,13 @@
 %%% -------------------------------------------------------------------
 %%% Author  : Sungjin Park <jinni.park@sk.com>
 %%%
-%%% Description : Routing functions for fubar.
+%%% Description : Routing functions for fubar system.
+%%%     This is the core module for fubar's distributed architecture
+%%% together with the gateway.
+%%%
+%%% It governs how the systems work by controlling:
+%%%   - how the routing information is stored
+%%%   - how the name resolving works
 %%%
 %%% Created : Nov 16, 2012
 %%% -------------------------------------------------------------------

@@ -1,11 +1,13 @@
 %%% -------------------------------------------------------------------
 %%% Author  : Sungjin Park <jinni.park@sk.com>
 %%%
-%%% Description : MQTT server for fubar.
-%%%               Used as a dispatcher in ranch:start_listener/6.
-%%%               The dispatcher callback is invoked by the protocol
-%%%               handler, which is mqtt_protocol.
-%%%               Refer mqtt_protocol.erl
+%%% Description : MQTT server.
+%%%    This is designed to run under mqtt_protocol as a dispather.
+%%% CONNECT and PINGREQ messages can be processed without a session but
+%%% others not.  Therefore all the other messages are just delivered to
+%%% the session which is a separate process that typically survives
+%%% longer.  Note that this performs just as a delivery channel and
+%%% most of the logics are implemented in mqtt_session.
 %%%
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
@@ -147,6 +149,8 @@ handle_message(Message=#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
 	?DEBUG([State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{stop, normal, State#?MODULE{timestamp=now()}};
+
+%% Fallback
 handle_message(Message, State) ->
 	?WARNING([State#?MODULE.client_id, "=>", Message, "dropping unknown message"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
@@ -185,8 +189,10 @@ handle_event(Event=#mqtt_suback{}, State) ->
 handle_event(Event=#mqtt_unsuback{}, State) ->
 	?DEBUG([State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+
+%% Fallback
 handle_event(Event, State) ->
-	?DEBUG([State#?MODULE.client_id, Event, "dropping unknown event"]),
+	?WARNING([State#?MODULE.client_id, Event, "dropping unknown event"]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}.
 
 %% @doc Finalize the server process.

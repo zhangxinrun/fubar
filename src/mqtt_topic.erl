@@ -1,7 +1,11 @@
 %%% -------------------------------------------------------------------
 %%% Author  : Sungjin Park <jinni.park@sk.com>
 %%%
-%%% Description : MQTT topic performs pubsub.
+%%% Description : MQTT topic endpoint for fubar system.
+%%%    This performs mqtt pubsub in fubar messaging system.  It is
+%%% another mqtt endpoint with mqtt_session.  This is designed to form
+%%% hierarchical subscription relationships among themselves to scale
+%%% more than millions of subscribers in a logical topic.
 %%%
 %%% Created : Nov 18, 2012
 %%% -------------------------------------------------------------------
@@ -117,31 +121,7 @@ handle_call(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, _, State=#?MODU
 handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MODULE{name=Name}) ->
 	% Check if it's a new subscription or not.
 	fubar:profile({Name, subscribe}, Fubar),
-	Subscribers = case lists:keytake(ClientId, 1, State#?MODULE.subscribers) of
-					  {value, {ClientId, QoS, OldPid, Module}, Rest} ->
-						  % The same subscription from different client.
-						  catch unlink(OldPid),
-						  [{ClientId, QoS, Pid, Module} | Rest];
-					  {value, {ClientId, _, OldPid, _OldModule}, Rest} ->
-						  % Need to update the subscription.
-						  case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
-							  [] ->
-								  ok;
-							  OldSubscribers ->
-								  F = fun(Subscriber) ->
-										  catch mnesia:dirty_delete_object(Subscriber)
-									  end,
-								  lists:foreach(F, OldSubscribers)
-						  end,
-						  mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
-						  catch unlink(OldPid),
-						  [{ClientId, QoS, Pid, Module} | Rest];
-					  false ->
-						  % Not found.  This is a new one.
-						  mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
-						  [{ClientId, QoS, Pid, Module} | State#?MODULE.subscribers]
-				  end,
-	link(Pid),
+	Subscribers = subscribe(Name, {ClientId, Pid}, {QoS, Module}, State#?MODULE.subscribers),
 	case State#?MODULE.fubar of
 		undefined ->
 			ok;
@@ -153,22 +133,7 @@ handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, Q
 %% Unsubscribe request from a client session.
 handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload=unsubscribe}, _, State=#?MODULE{name=Name}) ->
 	fubar:profile({Name, unsubscribe}, Fubar),
-	Subscribers = case lists:keytake(ClientId, 1, State#?MODULE.subscribers) of
-					  {value, {ClientId, _, Pid, _}, Rest} ->
-						  catch unlink(Pid),
-						  case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
-							  [] ->
-								  ok;
-							  OldSubscribers ->
-								  F = fun(Subscriber) ->
-										  catch mnesia:dirty_delete_object(Subscriber)
-									  end,
-								  lists:foreach(F, OldSubscribers)
-						  end,
-						  Rest;
-					  false ->
-						  State#?MODULE.subscribers
-				  end,
+	Subscribers = unsubscribe(Name, ClientId, State#?MODULE.subscribers),
 	{reply, ok, State#?MODULE{subscribers=Subscribers}};
 
 %% Fallback
@@ -197,31 +162,7 @@ handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, Q
 			  {ok, {Addr, _}} -> Addr;
 			  _ -> undefined
 		  end,
-	Subscribers = case lists:keytake(ClientId, 1, State#?MODULE.subscribers) of
-					  {value, {ClientId, QoS, OldPid, Module}, Rest} ->
-						  % The same subscription from different client.
-						  catch unlink(OldPid),
-						  [{ClientId, QoS, Pid, Module} | Rest];
-					  {value, {ClientId, _, OldPid, _OldModule}, Rest} ->
-						  % Need to update the subscription.
-						  case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
-							  [] ->
-								  ok;
-							  OldSubscribers ->
-								  F = fun(Subscriber) ->
-										  catch mnesia:dirty_delete_object(Subscriber)
-									  end,
-								  lists:foreach(F, OldSubscribers)
-						  end,
-						  mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
-						  catch unlink(OldPid),
-						  [{ClientId, QoS, Pid, Module} | Rest];
-					  false ->
-						  % Not found.  This is a new one.
-						  mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
-						  [{ClientId, QoS, Pid, Module} | State#?MODULE.subscribers]
-				  end,
-	catch link(Pid),
+	Subscribers = subscribe(Name, {ClientId, Pid}, {QoS, Module}, State#?MODULE.subscribers),
 	case State#?MODULE.fubar of
 		undefined ->
 			ok;
@@ -233,22 +174,7 @@ handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, Q
 %% Unsubscribe request from a client session (async version).
 handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload=unsubscribe}, State=#?MODULE{name=Name}) ->
 	fubar:profile({Name, unsubscribe, async}, Fubar),
-	Subscribers = case lists:keytake(ClientId, 1, State#?MODULE.subscribers) of
-					  {value, {ClientId, _, Pid, _}, Rest} ->
-						  catch unlink(Pid),
-						  case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
-							  [] ->
-								  ok;
-							  OldSubscribers ->
-								  F = fun(Subscriber) ->
-										  catch mnesia:dirty_delete_object(Subscriber)
-									  end,
-								  lists:foreach(F, OldSubscribers)
-						  end,
-						  Rest;
-					  false ->
-						  State#?MODULE.subscribers
-				  end,
+	Subscribers = unsubscribe(Name, ClientId, State#?MODULE.subscribers),
 	{noreply, State#?MODULE{subscribers=Subscribers}};
 
 %% Fallback
@@ -283,29 +209,83 @@ code_change(OldVsn, State, Extra) ->
 %% Local
 %%
 publish(Name, Fubar, Subscribers) ->
+	From = fubar:get(from, Fubar),
 	Fubar1 = fubar:set([{from, Name}, {via, Name}], Fubar),
 	Publish = fubar:get(payload, Fubar1),
 	QoS = Publish#mqtt_publish.qos,
 	F = fun({ClientId, MaxQoS, Pid, Module}) ->
-			Publish1 = Publish#mqtt_publish{qos=mqtt:degrade(QoS, MaxQoS)},
-			Fubar2 = fubar:set([{to, ClientId}, {payload, Publish1}], Fubar1),
-			case Pid of
-				undefined ->
-					case fubar_route:ensure(ClientId, Module) of
-						{ok, Addr} ->
-							catch gen_server:cast(Addr, Fubar2),
-							{ClientId, MaxQoS, Addr, Module};
-						_ ->
-							?ERROR([Name, ClientId, "cannot ensure subscriber, something wrong"]),
-							{ClientId, MaxQoS, undefined, Module}
-					end;
+			case ClientId of
+				From ->
+					% Don't send the message to the sender back.
+					ok;
 				_ ->
-					catch gen_server:cast(Pid, Fubar2),
-					{ClientId, MaxQoS, Pid, Module}
+					Publish1 = Publish#mqtt_publish{qos=mqtt:degrade(QoS, MaxQoS)},
+					Fubar2 = fubar:set([{to, ClientId}, {payload, Publish1}], Fubar1),
+					case Pid of
+						undefined ->
+							case fubar_route:ensure(ClientId, Module) of
+								{ok, Addr} ->
+									catch gen_server:cast(Addr, Fubar2),
+									{ClientId, MaxQoS, Addr, Module};
+								_ ->
+									?ERROR([Name, ClientId, "cannot ensure subscriber, something wrong"]),
+									{ClientId, MaxQoS, undefined, Module}
+							end;
+						_ ->
+							catch gen_server:cast(Pid, Fubar2),
+							{ClientId, MaxQoS, Pid, Module}
+					end
 			end
 		end,
-	Subscribers1 = lists:map(F, Subscribers),
-	{Fubar1, Subscribers1}.
+	{Fubar1, lists:map(F, Subscribers)}.
+
+subscribe(Name, {ClientId, Pid}, {QoS, Module}, Subscribers) ->
+	% Check if it's a new subscription or not.
+	case lists:keytake(ClientId, 1, Subscribers) of
+		{value, {ClientId, QoS, OldPid, Module}, Rest} ->
+			% The same subscription from possibly different client.
+			catch unlink(OldPid),
+			catch link(Pid),
+			[{ClientId, QoS, Pid, Module} | Rest];
+		{value, {ClientId, _OldQoS, OldPid, _OldModule}, Rest} ->
+			% Need to update the subscription.
+			catch unlink(OldPid),
+			case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
+				[] ->
+					ok;
+				OldSubscribers ->
+					F = fun(Subscriber) ->
+							mnesia:dirty_delete_object(Subscriber)
+						end,
+					lists:foreach(F, OldSubscribers)
+			end,
+			mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
+			catch link(Pid),
+			[{ClientId, QoS, Pid, Module} | Rest];
+		false ->
+			% Not found.  This is a new one.
+			mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
+			catch link(Pid),
+			[{ClientId, QoS, Pid, Module} | Subscribers]
+	end.
+
+unsubscribe(Name, ClientId, Subscribers) ->
+	case lists:keytake(ClientId, 1, Subscribers) of
+		{value, {ClientId, _, Pid, _}, Rest} ->
+			catch unlink(Pid),
+			case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
+				[] ->
+					ok;
+				OldSubscribers ->
+					F = fun(Subscriber) ->
+							catch mnesia:dirty_delete_object(Subscriber)
+						end,
+					lists:foreach(F, OldSubscribers)
+			end,
+			Rest;
+		false ->
+			Subscribers
+	end.
 
 %%
 %% Unit Tests

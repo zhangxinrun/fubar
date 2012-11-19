@@ -2,10 +2,14 @@
 %%% Author  : Sungjin Park <jinni.park@sk.com>
 %%%
 %%% Description : MQTT protocol parser.
-%%%               Used as a protocol handler in ranch:start_listener/6.
-%%%               This module does syntactic tasks only.
-%%%               No automatic reply to any MQTT message.
-%%%               All the behaviors must be implemented in dispatchers. 
+%%%     This is initially designed to run under ranch framework but
+%%% later extended to run independently.  This module represens a
+%%% process that receives tcp bytestream, parses it to produce mqtt
+%%% packets and calls a dispatcher, which is given as a parameter
+%%% {dispatch, Module} when starting the process.  The dispatcher
+%%% must have at least 4 functions init/1, handle_message/2,
+%%% handle_event/2 and terminate/1 defined.  Refer mqtt_server for
+%%% example.
 %%%
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
@@ -24,7 +28,7 @@
 -include("mqtt.hrl").
 -include("log.hrl").
 -include("props_to_record.hrl").
-
+ 
 %%
 %% Records
 %%
@@ -48,14 +52,14 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% @doc Start an MQTT client process.
-%% Settings should be given as a parameter -- the application metadata doesn't apply.
+%%      Settings should be given as a parameter -- the application metadata doesn't apply.
 -spec start(proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
 start(Props) ->
 	State = ?PROPS_TO_RECORD(Props, ?MODULE),
 	gen_server:start(?MODULE, State#?MODULE{context=Props}, []).
 
 %% @doc Start an MQTT server process that receives and parses packets.
-%% This function is called when the listener(ranch) accepts a connection.
+%%      This function is called when the listener(ranch) accepts a connection.
 -spec start_link(pid(), port(), module(), proplist(atom(), term())) ->
 		  {ok, pid()} | {error, reason()}.
 start_link(Listener, Socket, Transport, Options) ->
@@ -72,62 +76,65 @@ stop(Pid) ->
 %%
 %% Callback functions
 %%
-init(State=#?MODULE{host=Host, port=Port, transport=Transport,
-				  socket_options=SocketOptions, dispatch=Dispatch, context=Context}) ->
-	% Dispatch:init is called at this point.
-	case State#?MODULE.socket of
-		undefined -> % client mode
-			case catch Transport:connect(Host, Port, SocketOptions) of
-				{ok, ClientSocket} ->
-					case catch Dispatch:init(Context) of
-						{reply, Reply, NewContext, Timeout} ->
-							Transport:send(ClientSocket, format(Reply)),
-							inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
-							{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
-						{reply_later, Reply, NewContext, Timeout} ->
-							gen_server:cast(self(), {send, Reply}),
-							inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
-							{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
-						{noreply, NewContext, Timeout} ->
-							inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
-							{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
-						{stop, Reason} ->
-							{stop, Reason};
-						Exit ->
-							{stop, Exit}
-					end;
-				{error, Reason} ->
+
+%% Initialize the protocol as a client mode.
+init(State=#?MODULE{host=Host, port=Port, transport=Transport, socket=undefined,
+					socket_options=SocketOptions, dispatch=Dispatch, context=Context}) ->
+	case catch Transport:connect(Host, Port, SocketOptions) of
+		{ok, ClientSocket} ->
+			case catch Dispatch:init(Context) of
+				{reply, Reply, NewContext, Timeout} ->
+					Transport:send(ClientSocket, format(Reply)),
+					inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
+					{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
+				{reply_later, Reply, NewContext, Timeout} ->
+					gen_server:cast(self(), {send, Reply}),
+					inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
+					{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
+				{noreply, NewContext, Timeout} ->
+					inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
+					{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
+				{stop, Reason} ->
 					{stop, Reason};
 				Exit ->
 					{stop, Exit}
 			end;
-		Socket -> % server mode
-			% Leave access log.
-			{ok, {PeerAddr, PeerPort}} = inet:peername(Socket),
-			?INFO(["access from", PeerAddr, PeerPort]),
-			case catch Dispatch:init(Context) of
-				{reply, Reply, NewContext, Timeout} ->
-					Transport:send(Socket, format(Reply)),
-					inet:setopts(Socket, SocketOptions ++ [{active, once}]),
-					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
-				{reply_later, Reply, NewContext, Timeout} ->
-					gen_server:cast(self(), {send, Reply}),
-					inet:setopts(Socket, SocketOptions ++ [{active, once}]),
-					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
-				{noreply, NewContext, Timeout} ->
-					inet:setopts(Socket, SocketOptions ++ [{active, once}]),
-					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
-				{error, Reason} ->
-					{stop, Reason};
-				Exit ->
-					{stop, Exit}
-			end
+		{error, Reason} ->
+			{stop, Reason};
+		Exit ->
+			{stop, Exit}
+	end;
+
+%% Initialize the protocol as a server mode.
+init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
+					dispatch=Dispatch, context=Context}) ->
+	% Leave access log.
+	{ok, {PeerAddr, PeerPort}} = inet:peername(Socket),
+	?INFO(["ACCESS from", PeerAddr, PeerPort]),
+	case catch Dispatch:init(Context) of
+		{reply, Reply, NewContext, Timeout} ->
+			Transport:send(Socket, format(Reply)),
+			inet:setopts(Socket, SocketOptions ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{reply_later, Reply, NewContext, Timeout} ->
+			gen_server:cast(self(), {send, Reply}),
+			inet:setopts(Socket, SocketOptions ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{noreply, NewContext, Timeout} ->
+			inet:setopts(Socket, SocketOptions ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{error, Reason} ->
+			{stop, Reason};
+		Exit ->
+			{stop, Exit}
 	end.
 
+%% Fallback
 handle_call(Request, From, State=#?MODULE{timeout=Timeout}) ->
-	?WARNING([handle_call, Request, From, State]),
+	?WARNING([Request, From, "dropping unknown call"]),
 	{reply, ok, State, Timeout}.
 
+%% Async administrative commands.
 handle_cast({send, Message}, State=#?MODULE{transport=Transport,
 										  socket=Socket,
 										  timeout=Timeout}) ->
@@ -141,49 +148,58 @@ handle_cast({send, Message}, State=#?MODULE{transport=Transport,
 	end;
 handle_cast(stop, State) ->
 	{stop, normal, State};
+
+%% Fallback
 handle_cast(Request, State=#?MODULE{timeout=Timeout}) ->
-	?WARNING([handle_cast, Request, State]),
+	?WARNING([Request, "dropping unknown cast"]),
 	{noreply, State, Timeout}.
 
+% Ignore pointless message from the listener.
 handle_info({shoot, Listener}, State=#?MODULE{listener=Listener, timeout=Timeout}) ->
-	% Ignore pointless message from the listener.
 	{noreply, State, Timeout};
-handle_info({tcp, Socket, Packet}, State=#?MODULE{transport=Transport, socket=Socket,
+
+%% Received tcp data, start parsing.
+handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Socket,
 												buffer=Buffer, dispatch=Dispatch,
 												context=Context,
 												timeout=Timeout}) ->
-	?DEBUG(["tcp packet", Packet]),
+	?DEBUG(["tcp data", Data]),
 	% Append the packet at the end of the buffer and start parsing.
-	case parse(State#?MODULE{buffer= <<Buffer/binary,Packet/binary>>}) of
+	case parse(State#?MODULE{buffer= <<Buffer/binary, Data/binary>>}) of
 		{ok, Message, NewState} ->
 			% Parsed one message.
-			case catch Dispatch:handle_message(Message, Context) of
+			% Call dispatcher.
+			case Dispatch:handle_message(Message, Context) of
 				{reply, Reply, NewContext, NewTimeout} ->
-					self() ! {tcp, Socket, <<>>},
 					Transport:send(Socket, format(Reply)),
+					% Simulate new tcp data to trigger next parsing schedule.
+					self() ! {tcp, Socket, <<>>},
 					{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 				{reply_later, Reply, NewContext, NewTimeout} ->
-					self() ! {tcp, Socket, <<>>},
 					gen_server:cast(self(), {send, Reply}),
+					self() ! {tcp, Socket, <<>>},
 					{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 				{noreply, NewContext, NewTimeout} ->
 					self() ! {tcp, Socket, <<>>},
 					{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 				{stop, Reason, NewContext} ->
-					{stop, Reason, NewState#?MODULE{context=NewContext}};
-				Exit ->
-					{stop, Exit, NewState}
+					{stop, Reason, NewState#?MODULE{context=NewContext}}
 			end;
 		{more, NewState} ->
+			% The socket gets active after consuming previous data.
 			inet:setopts(Socket, [{active, once}]),
 			{noreply, NewState, Timeout};
 		{error, Reason, NewState} ->
 			{stop, Reason, NewState}
 	end;
+
+%% Socket close detected.
 handle_info({tcp_closed, Socket}, State=#?MODULE{socket=Socket}) ->
 	{stop, normal, State#?MODULE{socket=undefined}};
+
+%% Invoke dispatcher to handle all the other events.
 handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
-							   dispatch=Dispatch, context=Context}) ->
+								 dispatch=Dispatch, context=Context}) ->
 	case catch Dispatch:handle_event(Info, Context) of
 		{reply, Reply, NewContext, NewTimeout} ->
 			Transport:send(Socket, format(Reply)),
@@ -199,11 +215,12 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 			{stop, Exit, State}
 	end.
 
+%% Termination logic.
 terminate(_Reason, #?MODULE{transport=Transport, socket=Socket,
 						  dispatch=Dispatch, context=Context}) ->
 	case Socket of
 		undefined ->
-			?INFO("disconnected");
+			?INFO("connection closed");
 		_ ->
 			?INFO("closing connection"),
 			Transport:close(Socket)

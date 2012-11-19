@@ -1,7 +1,13 @@
 %%% -------------------------------------------------------------------
 %%% Author  : Sungjin Park <jinni.park@sk.com>
 %%%
-%%% Description : MQTT session provides persistency for clients.
+%%% Description : MQTT session for fubar system.
+%%%     This plays as a persistent mqtt endpoint in fubar messaging
+%%% system.  The mqtt_server may up or down as a client connects or
+%%% disconnects but this keeps running and survives unwilling client
+%%% disconnection.  The session gets down only when the client sets
+%%% clean_session and sends DISCONNECT.  While running, it buffers
+%%% messages to the client until it gets available.
 %%%
 %%% Created : Nov 15, 2012
 %%% -------------------------------------------------------------------
