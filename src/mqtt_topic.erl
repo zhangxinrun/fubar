@@ -217,7 +217,7 @@ publish(Name, Fubar, Subscribers) ->
 			case ClientId of
 				From ->
 					% Don't send the message to the sender back.
-					ok;
+					{ClientId, MaxQoS, Pid, Module};
 				_ ->
 					Publish1 = Publish#mqtt_publish{qos=mqtt:degrade(QoS, MaxQoS)},
 					Fubar2 = fubar:set([{to, ClientId}, {payload, Publish1}], Fubar1),
