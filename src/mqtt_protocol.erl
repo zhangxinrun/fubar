@@ -33,17 +33,17 @@
 %% Records
 %%
 -record(?MODULE, {host = "localhost" :: hostname() | ipaddr(), % for client mode
-				port = 1883 :: ipport(), % for client mode
-				listener :: pid(), % for server mode
-				transport = ranch_tcp :: module(),
-				socket :: port(),
-				socket_options = [] :: proplist(atom(), term()),
-				max_packet_size = 4096 :: pos_integer(),
-				header,
-				buffer = <<>> :: binary(),
-				dispatch :: module(),
-				context = [] :: any(),
-				timeout :: timeout()}).
+				  port = 1883 :: ipport(), % for client mode
+				  listener :: pid(), % for server mode
+				  transport = ranch_tcp :: module(),
+				  socket :: port(),
+				  socket_options = [] :: proplist(atom(), term()),
+				  max_packet_size = 4096 :: pos_integer(),
+				  header,
+				  buffer = <<>> :: binary(),
+				  dispatch :: module(),
+				  context = [] :: any(),
+				  timeout :: timeout()}).
 
 %%
 %% Exports

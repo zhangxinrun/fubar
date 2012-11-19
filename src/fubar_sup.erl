@@ -29,10 +29,10 @@
 %% @doc Start the supervisor.
 -spec start_link() -> {ok, pid()} | {error, reason()}.
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+	supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %%
 %% Supervisor callbacks
 %%
 init(_) ->
-    {ok, {{one_for_one, ?MAX_R, ?MAX_T}, []}}.
+	{ok, {{one_for_one, ?MAX_R, ?MAX_T}, []}}.

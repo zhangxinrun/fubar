@@ -46,7 +46,7 @@ start() ->
 	Path = filename:join(Settings#settings.log_dir, io_lib:format("~w", [node()])),
 	ok = filelib:ensure_dir(Path++"/"),
 	error_logger:add_report_handler(
-		log_mf_h, log_mf_h:init(Path, Settings#settings.log_max_bytes, Settings#settings.log_max_files)),
+	  log_mf_h, log_mf_h:init(Path, Settings#settings.log_max_bytes, Settings#settings.log_max_files)),
 	application:start(?MODULE).
 
 %% @doc Stop application.
@@ -70,7 +70,7 @@ settings(Module) ->
 -spec settings(module(), proplist(atom(), term())) -> ok.
 settings(Module, Props) ->
 	application:set_env(?MODULE, Module, Props).
-		
+
 %% @doc Create a fubar.
 %%      Refer fubar.hrl for field definition.
 %%      All the timestamps are set as now.
@@ -88,11 +88,11 @@ set(Props, Fubar=#fubar{}) ->
 	Base = ?PROPS_TO_RECORD(Props, fubar, Fubar)(),
 	Now = now(),
 	Base#fubar{
-		origin = stamp(Base#fubar.origin, Now),
-		from = stamp(Base#fubar.from, Now),
-		to = stamp(Base#fubar.to, Now),
-		via = stamp(Base#fubar.via, Now)
-	}.
+			   origin = stamp(Base#fubar.origin, Now),
+			   from = stamp(Base#fubar.from, Now),
+			   to = stamp(Base#fubar.to, Now),
+			   via = stamp(Base#fubar.via, Now)
+			  }.
 
 %% @doc Get a field or fields in a fubar.
 %%      Refer fubar.hrl for field definition.
@@ -157,14 +157,14 @@ profile(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, to={To, T3}, vi
 apply_all_module_attributes_of({Name, Args}) ->
 	[Result || {Module, Attrs} <- all_module_attributes_of(Name),
 			   Result <- lists:map(fun(Attr) ->
-									   case Attr of
-										   {M, F, A} ->
-											   {{M, F, A}, apply(M, F, A)};
-										   {F, A} ->
-											   {{Module, F, A}, apply(Module, F, A)};
-										   F ->
-											   {{Module, F, Args}, apply(Module, F, Args)}
-									   end
+										   case Attr of
+											   {M, F, A} ->
+												   {{M, F, A}, apply(M, F, A)};
+											   {F, A} ->
+												   {{Module, F, A}, apply(Module, F, A)};
+											   F ->
+												   {{Module, F, Args}, apply(Module, F, Args)}
+										   end
 								   end, Attrs)];
 apply_all_module_attributes_of(Name) ->
 	apply_all_module_attributes_of({Name, []}).
@@ -174,7 +174,7 @@ all_module_attributes_of(Name) ->
 								 {ok, M} <- [application:get_key(App, modules)]]),
 	lists:foldl(fun(Module, Acc) ->
 						case lists:append([Attr || {N, Attr} <- module_attributes_in(Module),
-														 N =:= Name]) of
+												   N =:= Name]) of
 							[] ->
 								Acc;
 							Attr ->

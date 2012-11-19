@@ -26,7 +26,7 @@
 
 %% @doc Routing table schema
 -record(?MODULE, {name = '_' :: term(),
-				  addr = '_' :: pid(),
+				  addr = '_' :: undefined | pid(),
 				  module = '_' :: module()}).
 
 %%
@@ -118,12 +118,9 @@ up(Name, Module) ->
 -spec down(term()) -> ok | {error, reason()}.
 down(Name) ->
 	case catch mnesia:dirty_read(?MODULE, Name) of
-		[Route] ->
-			easy_write(Route#?MODULE{addr=undefined});
-		[] ->
-			{error, not_found};
-		Error ->
-			{error, Error}
+		[Route] -> easy_write(Route#?MODULE{addr=undefined});
+		[] -> {error, not_found};
+		Error -> {error, Error}
 	end.
 
 %%
@@ -131,10 +128,8 @@ down(Name) ->
 %%		
 easy_write(Record) ->
 	case catch mnesia:dirty_write(Record) of
-		{atomic, ok} ->
-			ok;
-		Error ->
-			{error, Error}
+		{atomic, ok} -> ok;
+		Error -> {error, Error}
 	end.
 
 %%

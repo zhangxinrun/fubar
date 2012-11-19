@@ -26,21 +26,21 @@
 -type timer() :: term().
 
 -record(?MODULE, {client_id :: binary(),
-				will :: {binary(), binary(), mqtt_qos(), boolean()},
-				clean_session = false :: boolean(),
-				timeout = 30000 :: timeout(),
-				timestamp :: timestamp(),
-				timer :: timer(),
-				state = connecting :: connecting | connected | disconnecting,
-				message_id = 0 :: integer(),
-				retry_pool = [] :: [{integer(), mqtt_message(), integer(), timer()}],
-				max_retries = 3 :: integer(),
-				retry_after = 10000 :: timeout(),
-				wait_buffer = [] :: [{integer(), mqtt_message()}],
-				max_waits = 10 :: integer()}).
+				  will :: {binary(), binary(), mqtt_qos(), boolean()},
+				  clean_session = false :: boolean(),
+				  timeout = 30000 :: timeout(),
+				  timestamp :: timestamp(),
+				  timer :: timer(),
+				  state = connecting :: connecting | connected | disconnecting,
+				  message_id = 0 :: integer(),
+				  retry_pool = [] :: [{integer(), mqtt_message(), integer(), timer()}],
+				  max_retries = 3 :: integer(),
+				  retry_after = 10000 :: timeout(),
+				  wait_buffer = [] :: [{integer(), mqtt_message()}],
+				  max_waits = 10 :: integer()}).
 
 -type state() :: #?MODULE{}.
--type event() :: any().
+					  -type event() :: any().
 
 %%
 %% Exports

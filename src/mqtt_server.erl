@@ -30,9 +30,9 @@
 %% Types and records
 %%
 -record(?MODULE, {client_id :: binary(),
-				session :: pid(),
-				timeout = 10000 :: timeout(),
-				timestamp :: timestamp()}).
+				  session :: pid(),
+				  timeout = 10000 :: timeout(),
+				  timestamp :: timestamp()}).
 
 -type state() :: #?MODULE{}.
 -type event() :: any().
