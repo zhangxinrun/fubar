@@ -31,7 +31,6 @@
 %% Records and types
 %%
 -record(?MODULE, {name :: binary(),
-				  clean_session = false :: boolean(),
 				  will :: {binary(), binary(), mqtt_qos(), boolean()},
 				  subscriptions = [] :: [{binary(), mqtt_qos()}],
 				  client :: pid(),
@@ -42,12 +41,13 @@
 				  buffer_limit = 10 :: integer(),
 				  retry_pool = [] :: [{integer(), #fubar{}, integer(), term()}],
 				  max_retries = 5 :: integer(),
-				  retry_after = 10000 :: timeout()}).
+				  retry_after = 10000 :: timeout(),
+				  clean = false :: boolean()}).
 
 %%
 %% Exports
 %%
--export([start/1, bind/2, state/1, transaction_loop/3]).
+-export([start/1, bind/2, clean/1, state/1, transaction_loop/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% @doc Start an unbound session.
@@ -57,22 +57,27 @@ start(Props) ->
 
 %% @doc Bind a client with existing session or create a new one.
 -spec bind(term(), proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
-bind(ClientId, Options) ->
+bind(ClientId, Will) ->
 	case fubar_route:resolve(ClientId) of
 		{ok, {undefined, ?MODULE}} ->
-			{ok, Pid} = gen_server:start(?MODULE, [{name, ClientId} | Options], []),
-			ok = gen_server:call(Pid, {bind, Options}),
+			{ok, Pid} = gen_server:start(?MODULE, [{name, ClientId}], []),
+			ok = gen_server:call(Pid, {bind, Will}),
 			{ok, Pid};
 		{ok, {Session, ?MODULE}} ->
-			ok = gen_server:call(Session, {bind, Options}),
+			ok = gen_server:call(Session, {bind, Will}),
 			{ok, Session};
 		{error, not_found} ->
-			{ok, Pid} = gen_server:start(?MODULE, [{name, ClientId} | Options], []),
-			ok = gen_server:call(Pid, {bind, Options}),
+			{ok, Pid} = gen_server:start(?MODULE, [{name, ClientId}], []),
+			ok = gen_server:call(Pid, {bind, Will}),
 			{ok, Pid};
 		Error ->
 			Error
 	end.
+
+%% @doc Mark a session to clean on client disconnect.
+-spec clean(pid()) -> ok.
+clean(Session) ->
+	gen_server:call(Session, clean).
 
 %% @doc Get session state.
 -spec state(pid()) -> #?MODULE{}.
@@ -83,7 +88,6 @@ init(Props) ->
 	State = ?PROPS_TO_RECORD(Props++fubar:settings(?MODULE), ?MODULE),
 	?DEBUG([init, State]),
 	process_flag(trap_exit, true),
-	% @todo implement migration from remote session when remote is set
 	fubar_route:up(State#?MODULE.name, ?MODULE),
 	{ok, State}.
 
@@ -91,21 +95,23 @@ init(Props) ->
 handle_call(state, _, State) ->
 	{reply, State, State};
 
-%% Client binding logic for mqtt_server.
-handle_call({bind, Props}, {Client, _}, State=#?MODULE{client=undefined, buffer=Buffer}) ->
+%% Client bind/clean logic for mqtt_server.
+handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=Buffer}) ->
 	?DEBUG([State#?MODULE.name, Client, "client up"]),
 	link(Client),
 	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
-	{reply, ok, ?PROPS_TO_RECORD(Props, ?MODULE, State#?MODULE{client=Client, buffer=[]})()};
-handle_call({bind, Props}, {Client, _}, State=#?MODULE{client=OldClient, buffer=Buffer}) ->
+	{reply, ok, State#?MODULE{client=Client, will=Will, buffer=[]}};
+handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=Buffer}) ->
 	?WARNING([State#?MODULE.name, Client, "client replaces", OldClient]),
 	catch unlink(OldClient),
 	exit(OldClient, kill),
 	link(Client),
 	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
-	{reply, ok, ?PROPS_TO_RECORD(Props, ?MODULE, State#?MODULE{client=Client, buffer=[]})()};
+	{reply, ok, State#?MODULE{client=Client, will=Will, buffer=[]}};
+handle_call(clean, _, State) ->
+	{reply, ok, State#?MODULE{clean=true}};
 
 %% Message delivery logic to the client (sync version).
 handle_call(Fubar=#fubar{}, _, State=#?MODULE{name=ClientId, client=undefined, buffer=Buffer, buffer_limit=N}) ->
@@ -327,17 +333,14 @@ handle_info(Info=#mqtt_unsubscribe{message_id=MessageId, topics=Topics}, State=#
 			lists:keydelete(Topic, 1, Subscriptions)
 		end,
 	{noreply, State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, Topics)}};
-handle_info(#mqtt_disconnect{}, State=#?MODULE{client=Client}) ->
-	catch unlink(Client),
-	case State#?MODULE.clean_session of
+handle_info({'EXIT', Client, Reason}, State=#?MODULE{client=Client}) ->
+	?DEBUG([State#?MODULE.name, Client, Reason, "client down"]),
+	case State#?MODULE.clean of
 		true ->
 			{stop, normal, State#?MODULE{client=undefined}};
 		_ ->
 			{noreply, State#?MODULE{client=undefined}}
 	end;
-handle_info({'EXIT', Client, Reason}, State=#?MODULE{client=Client}) ->
-	?DEBUG([State#?MODULE.name, Client, Reason, "client down"]),
-	{noreply, State#?MODULE{client=undefined}};
 handle_info({'EXIT', Worker, normal}, State=#?MODULE{name=ClientId}) ->
 	% Likely to be a transaction completion signal.
 	case lists:keytake(Worker, 2, State#?MODULE.transactions) of
@@ -387,7 +390,7 @@ terminate(Reason, State=#?MODULE{name=ClientId, transaction_timeout=Timeout}) ->
 					do_transaction(ClientId, Message, Timeout)
 			end
 	end,
-	fubar_route:down(ClientId).
+	fubar_route:clean(ClientId).
 
 code_change(OldVsn, State, Extra) ->
 	?WARNING([code_change, OldVsn, State, Extra]),

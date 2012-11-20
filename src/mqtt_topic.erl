@@ -53,7 +53,7 @@
 boot() ->
 	case mnesia:create_table(mqtt_subscriber, [{attributes, record_info(fields, mqtt_subscriber)},
 											   {disc_copies, [node()]}, {type, bag},
-											   {index, [client_id]}, {local_content, true}]) of
+											   {index, [client_id]}]) of
 		{atomic, ok} ->
 			?INFO({"table created", mqtt_subscriber}),
 			ok;

@@ -3,8 +3,8 @@
 %%%
 %%% Description : MQTT server.
 %%%    This is designed to run under mqtt_protocol as a dispather.
-%%% CONNECT and PINGREQ messages can be processed without a session but
-%%% others not.  Therefore all the other messages are just delivered to
+%%% CONNECT, PINGREQ and DISCONNECT messages are processed here but
+%%% others not.  All the other messages are just delivered to
 %%% the session which is a separate process that typically survives
 %%% longer.  Note that this performs just as a delivery channel and
 %%% most of the logics are implemented in mqtt_session.
@@ -30,6 +30,7 @@
 %% Types and records
 %%
 -record(?MODULE, {client_id :: binary(),
+				  clean_session = false :: boolean(),
 				  session :: pid(),
 				  timeout = 10000 :: timeout(),
 				  timestamp :: timestamp()}).
@@ -81,18 +82,19 @@ handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username}, Sta
 			% Once bound, the session will detect process termination.
 			% Timeout value should be set as requested.
 			Will = case Message#mqtt_connect.will_topic of
-					   undefined -> [];
-						   Topic -> [{will, {Topic, Message#mqtt_connect.will_message,
-											 Message#mqtt_connect.will_qos, Message#mqtt_connect.will_retain}}]
+					   undefined -> undefined;
+					   Topic -> {Topic, Message#mqtt_connect.will_message,
+								 Message#mqtt_connect.will_qos, Message#mqtt_connect.will_retain}
 				   end,
-			case mqtt_session:bind(ClientId, [{clean_session, Message#mqtt_connect.clean_session} | Will]) of
+			case mqtt_session:bind(ClientId, Will) of
 				{ok, Session} ->
 					Timeout = case Message#mqtt_connect.keep_alive of
 								  infinity -> infinity;
 								  KeepAlive -> KeepAlive*2000
 							  end,
 					{reply, mqtt:connack([{code, accepted}]),
-					 State#?MODULE{client_id=ClientId, session=Session, timeout=Timeout, timestamp=now()}, Timeout};
+					 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
+								   session=Session, timeout=Timeout, timestamp=now()}, Timeout};
 				Error ->
 					?ERROR([ClientId, Error, "session bind failure"]),
 					% Timeout immediately to close just after reply.
@@ -145,9 +147,14 @@ handle_message(Message=#mqtt_unsubscribe{}, State=#?MODULE{session=Session}) ->
 	?DEBUG([State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
-handle_message(Message=#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
-	?DEBUG([State#?MODULE.client_id, "=>", Message]),
-	Session ! Message,
+handle_message(#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
+	?DEBUG([State#?MODULE.client_id, "=> DISCONNECT"]),
+	case State#?MODULE.clean_session of
+		true ->
+			mqtt_session:clean(Session);
+		_ ->
+			ok
+	end,
 	{stop, normal, State#?MODULE{timestamp=now()}};
 
 %% Fallback

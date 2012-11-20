@@ -32,7 +32,7 @@
 %%
 %% Exports
 %%
--export([boot/0, cluster/1, resolve/1, ensure/2, up/2, down/1]).
+-export([boot/0, cluster/1, resolve/1, ensure/2, up/2, down/1, clean/1]).
 
 %% @doc Master mode bootstrap logic.
 boot() ->
@@ -121,6 +121,11 @@ down(Name) ->
 		[] -> {error, not_found};
 		Error -> {error, Error}
 	end.
+
+%% @doc Delete route.
+-spec clean(term()) -> ok | {error, reason()}.
+clean(Name) ->
+	catch mnesia:dirty_delete(?MODULE, Name).
 
 %%
 %% Local

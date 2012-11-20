@@ -4,23 +4,26 @@ ERL=erl
 node=fubar
 app=fubar
 
+mqtt_port=1883
+master=undefined
+
 # Compile source codes only.
 compile:
 	$(REBAR) compile
 
-# Update all the dependencies, compile and initialize the runtime.
-boot: get-deps update-deps compile
-	$(ERL) -pa ebin deps/*/ebin -boot start_sasl -sname $(node) -mnesia dir '"priv/data/$(node)"' -s $(app) boot
-
 # Start the program in test mode.
 test: compile
 	mkdir -p priv/data/$(node)
-	$(ERL) -pa ebin deps/*/ebin +A 16 +K true +P 1000000 +W w -boot start_sasl -sname $(node) -s reloader -s $(app) -mnesia dir '"priv/data/$(node)"'
+	$(ERL) -pa ebin deps/*/ebin +A 16 +K true +P 1000000 +W w -boot start_sasl \
+		-sname $(node) -s reloader -s $(app) -mnesia dir '"priv/data/$(node)"' \
+		-env MQTT_PORT $(mqtt_port) -env FUBAR_MASTER $(master)
 
 # Start the program in production mode.
 run: compile
 	mkdir -p priv/data/$(node)
-	$(ERL) -pa ebin deps/*/ebin +A 16 +K true +P 1000000 +W w -boot start_sasl -sname $(node) -s reloader -s $(app) -detached -mnesia dir '"priv/data/$(node)"'
+	$(ERL) -pa ebin deps/*/ebin +A 16 +K true +P 1000000 +W w -boot start_sasl \
+	-sname $(node) -s reloader -s $(app) -detached -mnesia dir '"priv/data/$(node)"' \
+	-env MQTT_PORT $(mqtt_port) -env FUBAR_MASTER $(master)
 
 # Debug running program in production mode.
 debug: compile

@@ -67,15 +67,16 @@ start(_StartType, _StartArgs) ->
 	application:start(crypto),
 	application:start(public_key),
 	application:start(ssl),
-	case Settings#settings.role of
-		master ->
+	case list_to_atom(os:getenv("FUBAR_MASTER")) of
+		undefined ->
 			fubar:apply_all_module_attributes_of(bootstrap_master);
-		{slave, MasterNode} ->
+		MasterNode ->
 			fubar:apply_all_module_attributes_of({bootstrap_slave, [MasterNode]})
 	end,
 	application:start(ranch),
+	{MQTTPort, _} = string:to_integer(os:getenv("MQTT_PORT")),
 	ranch:start_listener(mqtt_listener, Settings#settings.acceptors,
-						 ranch_tcp, [{port, Settings#settings.port}],
+						 ranch_tcp, [{port, MQTTPort}],
 						 mqtt_protocol, [{dispatch, mqtt_server}]).
 
 stop(_State) ->
