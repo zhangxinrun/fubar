@@ -1,12 +1,12 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : fubar application callback.
 %%%
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
 -module(fubar_app).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 -behaviour(application).
 
 -bootstrap_master(boot).
@@ -22,9 +22,7 @@
 %%
 %% Records
 %%
--record(settings, {role = master :: master | {slave, node()},
-				   acceptors = 100 :: integer(),
-				   port = 1883 :: integer()}).
+-record(settings, {acceptors = 100 :: integer()}).
 
 %%
 %% Exports

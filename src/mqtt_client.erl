@@ -1,12 +1,12 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : MQTT tty client prints messages to error_logger.
 %%%
 %%% Created : Nov 15, 2012
 %%% -------------------------------------------------------------------
 -module(mqtt_client).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 
 %%
 %% Includes

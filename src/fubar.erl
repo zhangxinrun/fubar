@@ -1,12 +1,12 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : fubar utility functions. 
 %%%
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
 -module(fubar).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 
 %%
 %% Include files
@@ -148,7 +148,6 @@ profile(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, to={To, T3}, vi
 		   {"id", Id},
 		   {"since origin", Origin, timer:now_diff(Now, T1)/1000},
 		   {"since from", From, timer:now_diff(Now, T2)/1000},
-		   {"since to", To, timer:now_diff(Now, T3)/1000},
 		   {"since via", Via, timer:now_diff(Now, T4)/1000}]).
 
 %% @doc Get all the attributes of a name in current runtime environment and invoke.

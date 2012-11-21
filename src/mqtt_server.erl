@@ -1,5 +1,5 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : MQTT server.
 %%%    This is designed to run under mqtt_protocol as a dispather.
@@ -12,7 +12,7 @@
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
 -module(mqtt_server).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 
 %%
 %% Includes
@@ -30,6 +30,7 @@
 %% Types and records
 %%
 -record(?MODULE, {client_id :: binary(),
+				  auth :: module(),
 				  clean_session = false :: boolean(),
 				  session :: pid(),
 				  timeout = 10000 :: timeout(),
@@ -68,47 +69,39 @@ init(Props) ->
 		  {reply_later, mqtt_message(), state(), timeout()} |
 		  {noreply, state(), timeout()} |
 		  {stop, reason(), state()}.
-handle_message(#mqtt_connect{username=undefined}, State=#?MODULE{session=undefined}) ->
-	?WARNING([State#?MODULE.client_id, "CONNECT without credential"]),
-	% Give another chance to connect with right credential again.
-	{reply, mqtt:connack([{code, unauthorized}]), State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
-handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username}, State=#?MODULE{session=undefined}) ->
-	% Connection with credential.
-	case mqtt_account:verify(Username, Message#mqtt_connect.password) of
-		ok ->
+handle_message(Message=#mqtt_connect{username=undefined}, State=#?MODULE{session=undefined}) ->
+	case State#?MODULE.auth of
+		undefined ->
 			?DEBUG([ClientId, "=> CONNECT accepted", Username]),
-			% The client is authorized.
-			% Now bind with the session or create a new one.
-			% Once bound, the session will detect process termination.
-			% Timeout value should be set as requested.
-			Will = case Message#mqtt_connect.will_topic of
-					   undefined -> undefined;
-					   Topic -> {Topic, Message#mqtt_connect.will_message,
-								 Message#mqtt_connect.will_qos, Message#mqtt_connect.will_retain}
-				   end,
-			case mqtt_session:bind(ClientId, Will) of
-				{ok, Session} ->
-					Timeout = case Message#mqtt_connect.keep_alive of
-								  infinity -> infinity;
-								  KeepAlive -> KeepAlive*2000
-							  end,
-					{reply, mqtt:connack([{code, accepted}]),
-					 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
-								   session=Session, timeout=Timeout, timestamp=now()}, Timeout};
+			bind_session(Message, State);
+		_ ->
+			?WARNING([State#?MODULE.client_id, "CONNECT without credential"]),
+			% Give another chance to connect with right credential again.
+			{reply, mqtt:connack([{code, unauthorized}]), State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}
+	end;
+handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username}, State=#?MODULE{session=undefined}) ->
+	case State#?MODULE.auth of
+		undefined ->
+			?DEBUG([ClientId, "=> CONNECT accepted", Username]),
+			bind_session(Message, State);
+		Auth ->
+			% Connection with credential.
+			case Auth:verify(Username, Message#mqtt_connect.password) of
+				ok ->
+					?DEBUG([ClientId, "=> CONNECT accepted", Username]),
+					% The client is authorized.
+					% Now bind with the session or create a new one.
+					bind_session(Message, State);
+				{error, not_found} ->
+					?WARNING([ClientId, "=> CONNECT not found", Username]),
+					{reply, mqtt:connack([{code, id_rejected}]), State#?MODULE{timestamp=now()}, 0};
+				{error, forbidden} ->
+					?WARNING([ClientId, "=> CONNECT forbidden", Username]),
+					{reply, mqtt:connack([{code, forbidden}]), State#?MODULE{timestamp=now()}, 0};
 				Error ->
-					?ERROR([ClientId, Error, "session bind failure"]),
-					% Timeout immediately to close just after reply.
-					{reply, mqtt:connack([{code, unavailable}]), State, 0}
-			end;
-		{error, not_found} ->
-			?WARNING([ClientId, "=> CONNECT not found", Username]),
-			{reply, mqtt:connack([{code, id_rejected}]), State#?MODULE{timestamp=now()}, 0};
-		{error, forbidden} ->
-			?WARNING([ClientId, "=> CONNECT forbidden", Username]),
-			{reply, mqtt:connack([{code, forbidden}]), State#?MODULE{timestamp=now()}, 0};
-		Error ->
-			?ERROR([ClientId, "=> CONNECT error", Error, Username]),
-			{reply, mqtt:connack([{code, unavailable}]), State#?MODULE{timestamp=now()}, 0}
+					?ERROR([ClientId, "=> CONNECT error", Error, Username]),
+					{reply, mqtt:connack([{code, unavailable}]), State#?MODULE{timestamp=now()}, 0}
+			end
 	end;
 handle_message(Message, State=#?MODULE{session=undefined}) ->
 	% All the other messages are not allowed without session.
@@ -218,6 +211,29 @@ timeout(Milliseconds, Timestamp) ->
 	case Milliseconds > Elapsed of
 		true -> Milliseconds - Elapsed;
 		_ -> 0
+	end.
+
+bind_session(Message=#mqtt_connect{client_id=ClientId}, State) ->
+	% Once bound, the session will detect process termination.
+	% Timeout value should be set as requested.
+	Will = case Message#mqtt_connect.will_topic of
+			   undefined -> undefined;
+			   Topic -> {Topic, Message#mqtt_connect.will_message,
+						 Message#mqtt_connect.will_qos, Message#mqtt_connect.will_retain}
+		   end,
+	case mqtt_session:bind(ClientId, Will) of
+		{ok, Session} ->
+			Timeout = case Message#mqtt_connect.keep_alive of
+						  infinity -> infinity;
+						  KeepAlive -> KeepAlive*2000
+					  end,
+			{reply, mqtt:connack([{code, accepted}]),
+			 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
+						   session=Session, timeout=Timeout, timestamp=now()}, Timeout};
+		Error ->
+			?ERROR([ClientId, Error, "session bind failure"]),
+			% Timeout immediately to close just after reply.
+			{reply, mqtt:connack([{code, unavailable}]), State, 0}
 	end.
 
 %%

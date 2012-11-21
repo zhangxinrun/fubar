@@ -1,5 +1,5 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : MQTT session for fubar system.
 %%%     This plays as a persistent mqtt endpoint in fubar messaging
@@ -12,7 +12,7 @@
 %%% Created : Nov 15, 2012
 %%% -------------------------------------------------------------------
 -module(mqtt_session).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 -behavior(gen_server).
 
 %%
@@ -404,7 +404,8 @@ transaction_loop(ClientId, Message, Timeout) ->
 	receive
 		release ->
 			?DEBUG([ClientId, mqtt:message_id(Message), "transaction fired"]),
-			do_transaction(ClientId, Message, Timeout)
+			% Async transaction is enough even if the transaction itself should be sync.
+			do_async_transaction(ClientId, Message)
 		after Timeout ->
 			exit(timeout)
 	end.

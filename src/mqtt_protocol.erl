@@ -1,5 +1,5 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : MQTT protocol parser.
 %%%     This is initially designed to run under ranch framework but
@@ -14,7 +14,7 @@
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
 -module(mqtt_protocol).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 -behavior(gen_server).
 
 %%

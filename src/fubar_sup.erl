@@ -1,12 +1,12 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : fubar supervisor callback.
 %%%
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
 -module(fubar_sup).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 -behaviour(supervisor).
 
 %%

@@ -1,5 +1,5 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : MQTT topic endpoint for fubar system.
 %%%    This performs mqtt pubsub in fubar messaging system.  It is
@@ -10,7 +10,7 @@
 %%% Created : Nov 18, 2012
 %%% -------------------------------------------------------------------
 -module(mqtt_topic).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 -behavior(gen_server).
 
 %%
@@ -227,6 +227,7 @@ publish(Name, Fubar, Subscribers) ->
 						undefined ->
 							case fubar_route:ensure(ClientId, Module) of
 								{ok, Addr} ->
+									catch link(Addr),
 									catch gen_server:cast(Addr, Fubar2),
 									{ClientId, MaxQoS, Addr, Module};
 								_ ->

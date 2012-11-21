@@ -1,6 +1,6 @@
 {application, fubar,
  [
-  {description, ""},
+  {description, "Scalable MQTT message broker"},
   {vsn, "1"},
   {registered, []},
   {applications, [kernel, stdlib]},
@@ -14,7 +14,8 @@
          {mqtt_protocol, [{max_packet_size, 4096},
                           {dispatch, mqtt_server}
                          ]},
-         {mqtt_server, [{timeout, 10000}
+         {mqtt_server, [{timeout, 10000},
+                        {auth, undefined}
                        ]},
          {mqtt_session, [{transaction_timeout, 60000},
                          {buffer_limit, 10},

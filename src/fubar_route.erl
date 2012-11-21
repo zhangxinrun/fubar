@@ -1,5 +1,5 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : Routing functions for fubar system.
 %%%     This is the core module for fubar's distributed architecture
@@ -12,7 +12,7 @@
 %%% Created : Nov 16, 2012
 %%% -------------------------------------------------------------------
 -module(fubar_route).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 
 %%
 %% Includes

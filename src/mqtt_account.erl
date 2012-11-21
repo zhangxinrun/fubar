@@ -1,12 +1,12 @@
 %%% -------------------------------------------------------------------
-%%% Author  : Sungjin Park <jinni.park@sk.com>
+%%% Author  : Sungjin Park <jinni.park@gmail.com>
 %%%
 %%% Description : MQTT account module.
 %%%
 %%% Created : Nov 14, 2012
 %%% -------------------------------------------------------------------
 -module(mqtt_account).
--author("Sungjin Park <jinni.park@sk.com>").
+-author("Sungjin Park <jinni.park@gmail.com>").
 
 %%
 %% Includes
