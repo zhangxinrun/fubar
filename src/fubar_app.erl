@@ -22,7 +22,8 @@
 %%
 %% Records
 %%
--record(settings, {acceptors = 100 :: integer()}).
+-record(settings, {acceptors = 100 :: integer(),
+				   max_connections = infinity :: timeout()}).
 
 %%
 %% Exports
@@ -74,7 +75,8 @@ start(_StartType, _StartArgs) ->
 	application:start(ranch),
 	{MQTTPort, _} = string:to_integer(os:getenv("MQTT_PORT")),
 	ranch:start_listener(mqtt_listener, Settings#settings.acceptors,
-						 ranch_tcp, [{port, MQTTPort}],
+						 ranch_tcp, [{port, MQTTPort},
+									 {max_connections, Settings#settings.max_connections}],
 						 mqtt_protocol, [{dispatch, mqtt_server}]).
 
 stop(_State) ->

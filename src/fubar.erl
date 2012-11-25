@@ -43,7 +43,7 @@
 start() ->
 	application:load(?MODULE),
 	Settings = ?PROPS_TO_RECORD(settings(?MODULE), settings),
-	Path = filename:join(Settings#settings.log_dir, io_lib:format("~w", [node()])),
+	Path = filename:join(Settings#settings.log_dir, io_lib:format("~s", [node()])),
 	ok = filelib:ensure_dir(Path++"/"),
 	error_logger:add_report_handler(
 	  log_mf_h, log_mf_h:init(Path, Settings#settings.log_max_bytes, Settings#settings.log_max_files)),
