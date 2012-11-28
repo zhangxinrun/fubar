@@ -142,6 +142,7 @@ timestamp(_, #fubar{}) ->
 %% @doc Leave profiling log.
 %% @sample fubar:profile(?MODULE, Fubar).
 -spec profile(term(), #fubar{}) -> ok.
+-ifdef(DEBUG)
 profile(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, to={To, T3}, via={Via, T4}}) ->
 	Now = now(),
 	?INFO([{'PROFILE', Tag},
@@ -149,6 +150,10 @@ profile(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, to={To, T3}, vi
 		   {"since origin", Origin, timer:now_diff(Now, T1)/1000},
 		   {"since from", From, timer:now_diff(Now, T2)/1000},
 		   {"since via", Via, timer:now_diff(Now, T4)/1000}]).
+-else.
+profile(_, _) ->
+	ok.
+-endif.
 
 %% @doc Get all the attributes of a name in current runtime environment and invoke.
 %%      The attributes must be a function form, i.e {M, F, A}, {F, A} or F where M must

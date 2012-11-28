@@ -110,7 +110,7 @@ handle_message(Message=#mqtt_connack{code=Code}, State=#?MODULE{client_id=Client
 	% Received connack while waiting for one.
 	case Code of
 		accepted ->
-			?INFO([ClientId, "<=", Message]),
+			?DEBUG([ClientId, "<=", Message]),
 			{noreply, State#?MODULE{state=connected, timestamp=now()}, State#?MODULE.timeout};
 		unavailable ->
 			?WARNING([ClientId, "<=", Message, "need to restart"]),
@@ -136,7 +136,7 @@ handle_message(Message=#mqtt_suback{message_id=MessageId}, State=#?MODULE{client
 	% Subscribe complete.  Stop retrying.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?INFO([ClientId, "<=", Message, "for", Request]),
+			?DEBUG([ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
@@ -166,10 +166,10 @@ handle_message(Message=#mqtt_publish{message_id=MessageId}, State=#?MODULE{clien
 			end;
 		at_least_once ->
 			% Transaction via 1-way handshake.
-			?INFO([ClientId, "<=", Message]),
+			feedback(ClientId, Message),
 			{reply, #mqtt_puback{message_id=MessageId}, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 		_ ->
-			?INFO([ClientId, "<=", Message]),
+			feedback(ClientId, Message),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_puback{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
@@ -177,7 +177,7 @@ handle_message(Message=#mqtt_puback{message_id=MessageId}, State=#?MODULE{client
 	% Complete a 1-way handshake transaction.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?INFO([ClientId, "<=", Message, "for", Request]),
+			?DEBUG([ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
@@ -203,7 +203,7 @@ handle_message(Message=#mqtt_pubrel{message_id=MessageId}, State=#?MODULE{client
 	% Complete a server-driven 3-way handshake transaction.
 	case lists:keytake(MessageId, 1, State#?MODULE.wait_buffer) of
 		{value, {MessageId, Request}, Rest} ->
-			?INFO([ClientId, "<=", Request]),
+			feedback(ClientId, Request),
 			Reply = #mqtt_pubcomp{message_id=MessageId},
 			{reply, Reply, State#?MODULE{timestamp=now(), wait_buffer=Rest}, State#?MODULE.timeout};
 		_ ->
@@ -215,7 +215,7 @@ handle_message(Message=#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{clien
 	% Complete a 3-way handshake transaction.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?INFO([ClientId, "<=", Message, "for", Request]),
+			?DEBUG([ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
@@ -237,7 +237,7 @@ handle_event({state, From}, State) ->
 	From ! State,
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
 handle_event(Event=#mqtt_connect{}, State=#?MODULE{client_id=undefined}) ->
-	?INFO([Event#mqtt_connect.client_id, "=>", Event]),
+	?DEBUG([Event#mqtt_connect.client_id, "=>", Event]),
 	{reply, Event, State#?MODULE{client_id=Event#mqtt_connect.client_id,
 								 will=case Event#mqtt_connect.will_topic of
 										  undefined -> undefined;
@@ -334,6 +334,11 @@ timeout(Milliseconds, Timestamp) ->
 		true -> Milliseconds - Elapsed;
 		_ -> 0
 	end.
+
+feedback(ClientId, #mqtt_publish{topic=Topic, payload=Payload}) ->
+	io:format("[~p] ~p from ~p~n", [ClientId, Payload, Topic]);
+feedback(ClientId, Message) ->
+	io:format("[~p] ~p~n", [ClientId, Message]).
 
 %%
 %% Unit Tests
