@@ -17,13 +17,13 @@
 %%
 %% Macros
 %%
--define(MAX_R, 3).
+-define(MAX_R, 100).
 -define(MAX_T, 5).
 
 %%
 %% Exports
 %%
--export([start_link/0, start_child/1, stop_child/1]).
+-export([start_link/0, start_child/1, start_child_after/2, stop_child/1]).
 -export([init/1]).
 
 %% @doc Start the supervisor.
@@ -34,6 +34,14 @@ start_link() ->
 %% @doc Start an mqtt client under supervisory.
 -spec start_child(proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
 start_child(Props) ->
+	Id = proplists:get_value(client_id, Props),
+	Spec = {Id, {mqtt_client, start_link, [Props]}, transient, 10, worker, dynamic},
+	supervisor:start_child(?MODULE, Spec).
+
+%% @doc Start an mqtt client under supervisory.
+-spec start_child_after(timeout(), proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
+start_child_after(Millisec, Props) ->
+	timer:sleep(Millisec),
 	Id = proplists:get_value(client_id, Props),
 	Spec = {Id, {mqtt_client, start_link, [Props]}, transient, 10, worker, dynamic},
 	supervisor:start_child(?MODULE, Spec).

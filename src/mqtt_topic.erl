@@ -31,7 +31,7 @@
 -record(?MODULE, {name :: binary(),
 				  subscribers = [] :: [{binary(), mqtt_qos(), pid(), module()}],
 				  fubar :: #fubar{},
-				  timeout = 10000 :: timeout()}).
+				  trace = false :: boolean()}).
 
 %% @doc Subscriber database schema.
 -record(mqtt_subscriber, {topic = '_' :: binary(),
@@ -46,7 +46,7 @@
 %%
 %% Exports
 %%
--export([boot/0, cluster/1, start/1, state/1]).
+-export([boot/0, cluster/1, start/1, state/1, trace/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% @doc Master mode bootstrap logic.
@@ -87,6 +87,10 @@ start(Props) ->
 state(Topic) ->
 	gen_server:call(Topic, state).
 
+%% @doc Start or stop tracing.
+trace(Topic, Value) ->
+	gen_server:call(Topic, {trace, Value}).
+
 init(State=#?MODULE{name=Name}) ->
 	?DEBUG([init, Name]),
 	% Restore all the subscriptions and retained message from database.
@@ -106,78 +110,62 @@ init(State=#?MODULE{name=Name}) ->
 handle_call(state, _, State) ->
 	{reply, State, State};
 
-%% Publish request.
-handle_call(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, _, State=#?MODULE{name=Name}) ->
-	fubar:profile({Name, publish, sync}, Fubar),
-	{Fubar1, Subscribers} = publish(Name, Fubar, State#?MODULE.subscribers),
-	Publish = fubar:get(payload,Fubar1),
-	case Publish#mqtt_publish.retain of
-		true ->
-			mnesia:dirty_write(#mqtt_retained{topic=Name, fubar=Fubar1}),
-			{reply, ok, State#?MODULE{fubar=Fubar1, subscribers=Subscribers}};
-		_ ->
-			{reply, ok, State#?MODULE{subscribers=Subscribers}}
-	end;
+handle_call({trace, Value}, _, State) ->
+	{reply, ok, State#?MODULE{trace=Value}};
 
 %% Subscribe request from a client session.
-handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MODULE{name=Name}) ->
-	% Check if it's a new subscription or not.
-	fubar:profile({Name, subscribe}, Fubar),
-	Subscribers = subscribe(Name, {ClientId, Pid}, {QoS, Module}, State#?MODULE.subscribers),
-	case State#?MODULE.fubar of
-		undefined ->
-			ok;
-		Retained ->
-			gen_server:cast(Pid, fubar:set([{to, ClientId}, {via, Name}], Retained))
-	end,
-	{reply, {ok, QoS}, State#?MODULE{subscribers=Subscribers}};
+handle_call(Fubar=#fubar{payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MODULE{name=Name}) ->
+	case fubar:get(to, Fubar) of
+		Name ->
+			fubar:trace({Name, subscribe}, Fubar),
+			Subscribers = subscribe(Name, {fubar:get(from, Fubar), Pid}, {QoS, Module}, State#?MODULE.subscribers),
+			case State#?MODULE.fubar of
+				undefined ->
+					ok;
+				Retained ->
+					gen_server:cast(Pid, fubar:set([{to, fubar:get(from, Fubar)}, {via, Name}], Retained))
+			end,
+			{reply, {ok, QoS}, State#?MODULE{subscribers=Subscribers}};
+		_ ->
+			?WARNING([Name, "not mine", Fubar]),
+			{reply, ok, State}
+	end;
 
 %% Unsubscribe request from a client session.
-handle_call(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload=unsubscribe}, _, State=#?MODULE{name=Name}) ->
-	fubar:profile({Name, unsubscribe}, Fubar),
-	Subscribers = unsubscribe(Name, ClientId, State#?MODULE.subscribers),
-	{reply, ok, State#?MODULE{subscribers=Subscribers}};
+handle_call(Fubar=#fubar{payload=unsubscribe}, _, State=#?MODULE{name=Name}) ->
+	case fubar:get(to, Fubar) of
+		Name ->
+			fubar:trace({Name, unsubscribe}, Fubar),
+			Subscribers = unsubscribe(Name, fubar:get(from, Fubar), State#?MODULE.subscribers),
+			{reply, ok, State#?MODULE{subscribers=Subscribers}};
+		_ ->
+			?WARNING([Name, "not mine", Fubar]),
+			{reply, ok, State}
+	end;
 
 %% Fallback
 handle_call(Request, From, State) ->
 	?WARNING([State#?MODULE.name, Request, From, "dropping unknown call"]),
 	{reply, ok, State}.
 
-%% Publish request (async version).
-handle_cast(Fubar=#fubar{to={Name, _}, payload=#mqtt_publish{}}, State=#?MODULE{name=Name}) ->
-	fubar:profile({Name, publish}, Fubar),
-	{Fubar1, Subscribers} = publish(Name, Fubar, State#?MODULE.subscribers),
-	Publish = fubar:get(payload,Fubar1),
-	case Publish#mqtt_publish.retain of
-		true ->
-			mnesia:dirty_write(#mqtt_retained{topic=Name, fubar=Fubar1}),
-			{noreply, State#?MODULE{fubar=Fubar1, subscribers=Subscribers}};
+%% Publish request.
+handle_cast(Fubar=#fubar{payload=#mqtt_publish{}}, State=#?MODULE{name=Name, trace=Trace}) ->
+	case fubar:get(to, Fubar) of
+		Name ->
+			fubar:trace({Name, publish}, Fubar),
+			{Fubar1, Subscribers} = publish(Name, Fubar, State#?MODULE.subscribers, Trace),
+			Publish = fubar:get(payload,Fubar1),
+			case Publish#mqtt_publish.retain of
+				true ->
+					mnesia:dirty_write(#mqtt_retained{topic=Name, fubar=Fubar1}),
+					{noreply, State#?MODULE{fubar=Fubar1, subscribers=Subscribers}};
+				_ ->
+					{noreply, State#?MODULE{subscribers=Subscribers}}
+			end;
 		_ ->
-			{noreply, State#?MODULE{subscribers=Subscribers}}
+			?WARNING([Name, "not mine", Fubar]),
+			{noreply, State}
 	end;
-
-%% Subscribe request from the client (async version).
-handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload={subscribe, QoS, Module}}, State=#?MODULE{name=Name}) ->
-	% Check if it's a new subscription or not.
-	fubar:profile({Name, subscribe, async}, Fubar),
-	Pid = case fubar_route:resolve(ClientId) of
-			  {ok, {Addr, _}} -> Addr;
-			  _ -> undefined
-		  end,
-	Subscribers = subscribe(Name, {ClientId, Pid}, {QoS, Module}, State#?MODULE.subscribers),
-	case State#?MODULE.fubar of
-		undefined ->
-			ok;
-		Retained ->
-			gen_server:cast(Pid, fubar:set([{to, ClientId}, {via, Name}], Retained))
-	end,
-	{noreply, State#?MODULE{subscribers=Subscribers}};
-
-%% Unsubscribe request from a client session (async version).
-handle_cast(Fubar=#fubar{from={ClientId, _}, to={Name, _}, payload=unsubscribe}, State=#?MODULE{name=Name}) ->
-	fubar:profile({Name, unsubscribe, async}, Fubar),
-	Subscribers = unsubscribe(Name, ClientId, State#?MODULE.subscribers),
-	{noreply, State#?MODULE{subscribers=Subscribers}};
 
 %% Fallback
 handle_cast(Message, State) ->
@@ -210,9 +198,18 @@ code_change(OldVsn, State, Extra) ->
 %%
 %% Local
 %%
-publish(Name, Fubar, Subscribers) ->
+publish(Name, Fubar, Subscribers, Trace) ->
 	From = fubar:get(from, Fubar),
-	Fubar1 = fubar:set([{from, Name}, {via, Name}], Fubar),
+	Updates = [{from, Name}, {via, Name}],
+	Fubar1 = case fubar:get(id, Fubar) of
+				 undefined -> % non-tracing fubar
+					 case Trace of
+						 true -> fubar:set([{id, uuid:uuid4()} | Updates], Fubar);
+						 _ -> fubar:set(Updates, Fubar)
+					 end;
+				 _ ->
+					 fubar:set(Updates, Fubar)
+			 end,
 	Publish = fubar:get(payload, Fubar1),
 	QoS = Publish#mqtt_publish.qos,
 	F = fun({ClientId, MaxQoS, Pid, Module}) ->

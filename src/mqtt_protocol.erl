@@ -240,7 +240,7 @@ parse(State=#?MODULE{header=undefined, buffer= <<>>}) ->
 parse(State=#?MODULE{header=undefined, buffer=Buffer}) ->
 	% Read fixed header part and go on.
 	{Fixed, Rest} = read_fixed_header(Buffer),
-	parse(State#?MODULE{header=Fixed, buffer=binary:copy(Rest, 1)});
+	parse(State#?MODULE{header=Fixed, buffer=Rest});
 parse(State=#?MODULE{header=Header, buffer=Buffer, max_packet_size=MaxPacketSize})
   when Header#mqtt_header.size =:= undefined ->
 	% Read size part.
@@ -265,6 +265,7 @@ parse(State=#?MODULE{header=Header, buffer=Buffer})
 	% Ready to read payload.
 	case catch read_payload(Header, Buffer) of
 		{ok, Message, Rest} ->
+			% Copy the buffer to prevent the binary from increasing indefinitely.
 			{ok, Message, State#?MODULE{header=undefined, buffer=binary:copy(Rest, 1)}};
 		{'EXIT', From, Reason} ->
 			{error, {'EXIT', From, Reason}}

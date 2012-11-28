@@ -16,10 +16,10 @@
 -type word() :: 0..65535.
 -type timestamp() :: {non_neg_integer(), non_neg_integer(), non_neg_integer()}.
 
--record(fubar, {id :: any(),
-				origin :: {any(), timestamp()},
-				from :: {any(), timestamp()},
-				to :: {any(), timestamp()},
-				via :: {any(), timestamp()},
+-record(fubar, {id :: term(),
+				origin :: term() | {term(), timestamp()},
+				from :: term() | {term(), timestamp()},
+				to :: term() | {term(), timestamp()},
+				via :: term() | {term(), timestamp()},
 				ttl = 10 :: non_neg_integer(),
-				payload :: any()}).
+				payload :: term()}).

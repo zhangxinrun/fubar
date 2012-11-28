@@ -67,7 +67,7 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	To clear this state, do:
 	$ make reset
 	
-8. Understanding profile logs
+8. Understanding trace logs
 	(fubar@host)1> {'PROFILE', <<"c2">>},
 	               {"since origin", <<"c1">>, 2.01}	% millisec from c1 to c2
 	               {"since from", <<"t1">>, 1.55}	% millisec from t1 to c2

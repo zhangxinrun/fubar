@@ -25,7 +25,7 @@
 -export([start/0, stop/0,						% application start/stop
 		 settings/1, settings/2,				% application environment getter/setter
 		 create/1, set/2, get/2, timestamp/2,	% fubar message manipulation
-		 profile/2,								% performance logging
+		 trace/2,								% trace logging
 		 apply_all_module_attributes_of/1		% bootstrapping utility
 		]).
 
@@ -86,13 +86,18 @@ create(Props) ->
 -spec set(proplist(atom(), term()), #fubar{}) -> #fubar{}.
 set(Props, Fubar=#fubar{}) ->
 	Base = ?PROPS_TO_RECORD(Props, fubar, Fubar)(),
-	Now = now(),
-	Base#fubar{
-			   origin = stamp(Base#fubar.origin, Now),
-			   from = stamp(Base#fubar.from, Now),
-			   to = stamp(Base#fubar.to, Now),
-			   via = stamp(Base#fubar.via, Now)
-			  }.
+	case Base#fubar.id of
+		undefined ->
+			Base;
+		_ ->
+			Now = now(),
+			Base#fubar{
+					   origin = stamp(Base#fubar.origin, Now),
+					   from = stamp(Base#fubar.from, Now),
+					   to = stamp(Base#fubar.to, Now),
+					   via = stamp(Base#fubar.via, Now)
+					  }
+	end.
 
 %% @doc Get a field or fields in a fubar.
 %%      Refer fubar.hrl for field definition.
@@ -107,11 +112,19 @@ get(id, #fubar{id=Value}) ->
 	Value;
 get(origin, #fubar{origin={Value, _}}) ->
 	Value;
+get(origin, #fubar{origin=Value}) ->
+	Value;
 get(from, #fubar{from={Value, _}}) ->
+	Value;
+get(from, #fubar{from=Value}) ->
 	Value;
 get(to, #fubar{to={Value, _}}) ->
 	Value;
+get(to, #fubar{to=Value}) ->
+	Value;
 get(via, #fubar{via={Value, _}}) ->
+	Value;
+get(via, #fubar{via=Value}) ->
 	Value;
 get(ttl, #fubar{ttl=Value}) ->
 	Value;
@@ -140,20 +153,17 @@ timestamp(_, #fubar{}) ->
 	undefined.
 
 %% @doc Leave profiling log.
-%% @sample fubar:profile(?MODULE, Fubar).
--spec profile(term(), #fubar{}) -> ok.
--ifdef(DEBUG).
-profile(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, to={To, T3}, via={Via, T4}}) ->
+%% @sample fubar:trace(?MODULE, Fubar).
+-spec trace(term(), #fubar{}) -> ok.
+trace(_, #fubar{id=undefined}) ->
+	ok;
+trace(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, via={Via, T3}}) ->
 	Now = now(),
 	?INFO([{'PROFILE', Tag},
 		   {"id", Id},
 		   {"since origin", Origin, timer:now_diff(Now, T1)/1000},
 		   {"since from", From, timer:now_diff(Now, T2)/1000},
-		   {"since via", Via, timer:now_diff(Now, T4)/1000}]).
--else.
-profile(_, _) ->
-	ok.
--endif.
+		   {"since via", Via, timer:now_diff(Now, T3)/1000}]).
 
 %% @doc Get all the attributes of a name in current runtime environment and invoke.
 %%      The attributes must be a function form, i.e {M, F, A}, {F, A} or F where M must
