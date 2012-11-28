@@ -35,7 +35,7 @@
 				  message_id = 0 :: integer(),
 				  retry_pool = [] :: [{integer(), mqtt_message(), integer(), timer()}],
 				  max_retries = 3 :: integer(),
-				  retry_after = 10000 :: timeout(),
+				  retry_after = 30000 :: timeout(),
 				  wait_buffer = [] :: [{integer(), mqtt_message()}],
 				  max_waits = 10 :: integer()}).
 
