@@ -142,7 +142,7 @@ timestamp(_, #fubar{}) ->
 %% @doc Leave profiling log.
 %% @sample fubar:profile(?MODULE, Fubar).
 -spec profile(term(), #fubar{}) -> ok.
--ifdef(DEBUG)
+-ifdef(DEBUG).
 profile(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, to={To, T3}, via={Via, T4}}) ->
 	Now = now(),
 	?INFO([{'PROFILE', Tag},

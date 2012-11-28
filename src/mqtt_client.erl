@@ -45,7 +45,7 @@
 %%
 %% Exports
 %%
--export([start/1, stop/1, state/1]).
+-export([start/1, stop/1, batch_start/2, batch_stop/1, batch_restart/1, start_link/1, state/1]).
 -export([init/1, handle_message/2, handle_event/2, terminate/1]).
 
 %% @doc Start an MQTT client with parameters.
@@ -65,6 +65,32 @@ start(Props) ->
 stop(Client) ->
 	Client ! #mqtt_disconnect{},
 	mqtt_protocol:stop(Client).
+
+-spec batch_start([binary()], proplist(atom(), term())) -> [{ok, pid()} | {error, reason()}].
+batch_start(ClientIds, Props) ->
+	mqtt_client_sup:start_link(),
+	[mqtt_client_sup:start_child([{client_id, ClientId} | Props]) || ClientId <- ClientIds].
+
+-spec batch_stop([binary()]) -> [ok].
+batch_stop(ClientIds) ->
+	[stop(Client) || {ClientId, Client, _, _} <- supervisor:which_children(mqtt_client_sup),
+					 lists:member(ClientId, ClientIds)].
+
+-spec batch_restart([binary()]) -> [{ok, pid()} | {error, reason()}].
+batch_restart(ClientIds) ->
+	[supervisor:restart_child(mqtt_client_sup, ClientId) || ClientId <- ClientIds].
+
+%% @doc Start and link an MQTT client.
+-spec start_link(proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
+start_link(Props) ->
+	case mqtt_protocol:start([{dispatch, ?MODULE} | proplists:delete(client_id, Props)]) of
+		{ok, Client} ->
+			link(Client),
+			Client ! mqtt:connect(Props),
+			{ok, Client};
+		Error ->
+			Error
+	end.
 
 %% @doc Get internal state of an MQTT client process.
 -spec state(pid()) -> {ok, #?MODULE{}} | {error, reason()}.
