@@ -16,7 +16,7 @@
 %% Includes
 %%
 -include("fubar.hrl").
--include("log.hrl").
+-include("sasl_log.hrl").
 -include("props_to_record.hrl").
 
 %%

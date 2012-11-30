@@ -16,7 +16,7 @@
 -endif.
 
 -include("fubar.hrl").
--include("log.hrl").
+-include("sasl_log.hrl").
 
 %%
 %% Records

@@ -14,9 +14,6 @@
 %%
 -include("fubar.hrl").
 
-%%
-%% Macros
-%%
 -define(MAX_R, 3).
 -define(MAX_T, 5).
 
@@ -35,4 +32,5 @@ start_link() ->
 %% Supervisor callbacks
 %%
 init(_) ->
-	{ok, {{one_for_one, ?MAX_R, ?MAX_T}, []}}.
+	LogManager = {fubar_log, {fubar_log, start_link, []}, permanent, 10, worker, dynamic},
+	{ok, {{one_for_one, ?MAX_R, ?MAX_T}, [LogManager]}}.

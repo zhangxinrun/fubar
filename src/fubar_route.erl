@@ -22,7 +22,7 @@
 -endif.
 
 -include("fubar.hrl").
--include("log.hrl").
+-include("sasl_log.hrl").
 
 %% @doc Routing table schema
 -record(?MODULE, {name = '_' :: term(),

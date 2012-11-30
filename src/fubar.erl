@@ -16,8 +16,11 @@
 -endif.
 
 -include("fubar.hrl").
--include("log.hrl").
 -include("props_to_record.hrl").
+
+-record(settings, {dir = "priv/log" :: string(),
+				   max_bytes = 10485760 :: integer(),
+				   max_files = 10 :: integer()}).
 
 %%
 %% Exported Functions
@@ -25,13 +28,8 @@
 -export([start/0, stop/0,						% application start/stop
 		 settings/1, settings/2,				% application environment getter/setter
 		 create/1, set/2, get/2, timestamp/2,	% fubar message manipulation
-		 trace/2,								% trace logging
 		 apply_all_module_attributes_of/1		% bootstrapping utility
 		]).
-
--record(settings, {log_dir = "priv/log" :: string(),
-				   log_max_bytes = 104857600 :: integer(),
-				   log_max_files = 10 :: integer()}).
 
 %%
 %% API Functions
@@ -42,11 +40,11 @@
 -spec start() -> ok | {error, reason()}.
 start() ->
 	application:load(?MODULE),
-	Settings = ?PROPS_TO_RECORD(settings(?MODULE), settings),
-	Path = filename:join(Settings#settings.log_dir, io_lib:format("~s", [node()])),
+	Settings = ?PROPS_TO_RECORD(settings(fubar_log), settings),
+	Path = filename:join(Settings#settings.dir, io_lib:format("~s", [node()])),
 	ok = filelib:ensure_dir(Path++"/"),
 	error_logger:add_report_handler(
-	  log_mf_h, log_mf_h:init(Path, Settings#settings.log_max_bytes, Settings#settings.log_max_files)),
+	  log_mf_h, log_mf_h:init(Path, Settings#settings.max_bytes, Settings#settings.max_files)),
 	application:start(?MODULE).
 
 %% @doc Stop application.
@@ -91,12 +89,10 @@ set(Props, Fubar=#fubar{}) ->
 			Base;
 		_ ->
 			Now = now(),
-			Base#fubar{
-					   origin = stamp(Base#fubar.origin, Now),
+			Base#fubar{origin = stamp(Base#fubar.origin, Now),
 					   from = stamp(Base#fubar.from, Now),
 					   to = stamp(Base#fubar.to, Now),
-					   via = stamp(Base#fubar.via, Now)
-					  }
+					   via = stamp(Base#fubar.via, Now)}
 	end.
 
 %% @doc Get a field or fields in a fubar.
@@ -151,19 +147,6 @@ timestamp(via, #fubar{via={_, Value}}) ->
 	Value;
 timestamp(_, #fubar{}) ->
 	undefined.
-
-%% @doc Leave profiling log.
-%% @sample fubar:trace(?MODULE, Fubar).
--spec trace(term(), #fubar{}) -> ok.
-trace(_, #fubar{id=undefined}) ->
-	ok;
-trace(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, via={Via, T3}}) ->
-	Now = now(),
-	?INFO([{'PROFILE', Tag},
-		   {"id", Id},
-		   {"since origin", Origin, timer:now_diff(Now, T1)/1000},
-		   {"since from", From, timer:now_diff(Now, T2)/1000},
-		   {"since via", Via, timer:now_diff(Now, T3)/1000}]).
 
 %% @doc Get all the attributes of a name in current runtime environment and invoke.
 %%      The attributes must be a function form, i.e {M, F, A}, {F, A} or F where M must

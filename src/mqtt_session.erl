@@ -24,7 +24,7 @@
 
 -include("fubar.hrl").
 -include("mqtt.hrl").
--include("log.hrl").
+-include("sasl_log.hrl").
 -include("props_to_record.hrl").
 
 %%
@@ -130,12 +130,12 @@ handle_call(Request, From, State) ->
 handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=undefined, buffer=Buffer, buffer_limit=N}) ->
 	% Got a message to deliver to the client.
 	% But it's offline now, keep the message in buffer for later delivery.
-	fubar:trace(ClientId, Fubar),
+	fubar_log:trace(ClientId, Fubar),
 	{noreply, State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N)}};
 handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=Client}) ->
 	% Got a message and the client is alive.
 	% Let's send it to the client.
-	fubar:trace(ClientId, Fubar),
+	fubar_log:trace(ClientId, Fubar),
 	case fubar:get(payload, Fubar) of
 		Message=#mqtt_publish{} ->
 			case Message#mqtt_publish.qos of
@@ -235,7 +235,7 @@ handle_info(Info=#mqtt_puback{message_id=MessageId}, State=#?MODULE{name=ClientI
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Fubar, _, Timer}, Pool} ->
 			timer:cancel(Timer),
-			fubar:trace({ClientId, "PUBACK"}, Fubar),
+			fubar_log:trace({ClientId, "PUBACK"}, Fubar),
 			{noreply, State#?MODULE{retry_pool=Pool}};
 		false ->
 			?WARNING([ClientId, Info, "publish might have been abandoned"]),
@@ -247,7 +247,7 @@ handle_info(Info=#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{name=ClientI
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Fubar, _, Timer}, Pool} ->
 			timer:cancel(Timer),
-			fubar:trace({ClientId, "PUBREC"}, Fubar),
+			fubar_log:trace({ClientId, "PUBREC"}, Fubar),
 			Reply = #mqtt_pubrel{message_id=MessageId},
 			Client ! Reply,
 			Fubar1 = fubar:set([{via, ClientId}, {payload, Reply}], Fubar),
@@ -272,7 +272,7 @@ handle_info(Info=#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{name=Client
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Fubar, _, Timer}, Pool} ->
 			timer:cancel(Timer),
-			fubar:trace({ClientId, "PUBCOMP"}, Fubar),
+			fubar_log:trace({ClientId, "PUBCOMP"}, Fubar),
 			{noreply, State#?MODULE{retry_pool=Pool}};
 		false ->
 			?WARNING([ClientId, Info, "pubrel might have been abandoned"]),

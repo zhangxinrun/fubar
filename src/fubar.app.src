@@ -5,12 +5,13 @@
   {registered, []},
   {applications, [kernel, stdlib]},
   {mod, {fubar_app, []}},
-  {env, [{fubar, [{log_dir, "priv/log"},
-                  {log_max_bytes, 10485760},
-                  {log_max_files, 10}
-                 ]},
-         {fubar_app, [{acceptors, 4},
+  {env, [{fubar_app, [{acceptors, 4},
                       {max_connections, infinity}
+                     ]},
+         {fubar_log, [{dir, "priv/log"},
+                      {max_bytes, 10485760},
+                      {max_files, 10},
+                      {classes, [trace, error]}
                      ]},
          {mqtt_protocol, [{max_packet_size, 4096},
                           {dispatch, mqtt_server}

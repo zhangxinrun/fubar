@@ -35,7 +35,7 @@ client: compile
 
 # Make a textual log snapshot.
 log:
-	priv/script/dump-log.escript $(node)-`date "+%Y%m%dT%H%M%S.log"` priv/log/$(node)@`hostname -s`
+	priv/script/dump-log.escript $(node)`date "-sasl-+%Y%m%dT%H%M%S.log"` priv/log/$(node)@`hostname -s`
 
 # Perform unit tests.
 check: compile

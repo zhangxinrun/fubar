@@ -22,7 +22,7 @@
 
 -include("fubar.hrl").
 -include("mqtt.hrl").
--include("log.hrl").
+-include("sasl_log.hrl").
 -include("props_to_record.hrl").
 
 %%
@@ -117,7 +117,7 @@ handle_call({trace, Value}, _, State) ->
 handle_call(Fubar=#fubar{payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MODULE{name=Name}) ->
 	case fubar:get(to, Fubar) of
 		Name ->
-			fubar:trace({Name, subscribe}, Fubar),
+			fubar_log:trace({Name, subscribe}, Fubar),
 			Subscribers = subscribe(Name, {fubar:get(from, Fubar), Pid}, {QoS, Module}, State#?MODULE.subscribers),
 			case State#?MODULE.fubar of
 				undefined ->
@@ -135,7 +135,7 @@ handle_call(Fubar=#fubar{payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MO
 handle_call(Fubar=#fubar{payload=unsubscribe}, _, State=#?MODULE{name=Name}) ->
 	case fubar:get(to, Fubar) of
 		Name ->
-			fubar:trace({Name, unsubscribe}, Fubar),
+			fubar_log:trace({Name, unsubscribe}, Fubar),
 			Subscribers = unsubscribe(Name, fubar:get(from, Fubar), State#?MODULE.subscribers),
 			{reply, ok, State#?MODULE{subscribers=Subscribers}};
 		_ ->
@@ -152,7 +152,7 @@ handle_call(Request, From, State) ->
 handle_cast(Fubar=#fubar{payload=#mqtt_publish{}}, State=#?MODULE{name=Name, trace=Trace}) ->
 	case fubar:get(to, Fubar) of
 		Name ->
-			fubar:trace({Name, publish}, Fubar),
+			fubar_log:trace({Name, publish}, Fubar),
 			{Fubar1, Subscribers} = publish(Name, Fubar, State#?MODULE.subscribers, Trace),
 			Publish = fubar:get(payload,Fubar1),
 			case Publish#mqtt_publish.retain of
