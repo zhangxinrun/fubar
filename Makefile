@@ -1,11 +1,12 @@
 REBAR=./rebar
 ERL=erl
-
-node=fubar
-app=fubar
+APP=fubar
 
 mqtt_port=1883
+node=fubar
 master=undefined
+host=localhost
+port=22
 
 # Compile source codes only.
 compile:
@@ -15,19 +16,21 @@ compile:
 test: compile
 	mkdir -p priv/data/$(node)
 	$(ERL) -pa ebin deps/*/ebin +A 100 +K true +P 1000000 +W w -boot start_sasl \
-		-sname $(node) -s reloader -s $(app) -mnesia dir '"priv/data/$(node)"' \
+		-sname $(node) -s reloader -s $(APP) -mnesia dir '"priv/data/$(node)"' \
 		-env MQTT_PORT $(mqtt_port) -env FUBAR_MASTER $(master)
 
 # Start the program in production mode.
 run: compile
-	mkdir -p priv/data/$(node)
-	$(ERL) -pa ebin deps/*/ebin +A 100 +K true +P 1000000 +W w -boot start_sasl \
-	-sname $(node) -s reloader -s $(app) -detached -mnesia dir '"priv/data/$(node)"' \
-	-env MQTT_PORT $(mqtt_port) -env FUBAR_MASTER $(master)
+	mkdir -p priv/data
+	mkdir -p /tmp/
+	run_erl -daemon /tmp/$(node)/ $(CURDIR)/priv/log/$(node) \
+	"$(ERL) -pa $(CURDIR)/ebin $(CURDIR)/deps/*/ebin +A 100 +K true +P 1000000 +W w -boot start_sasl \
+	-sname $(node) -s $(APP) -mnesia dir '\"$(CURDIR)/priv/data/$(node)\"' \
+	-env MQTT_PORT $(mqtt_port) -env FUBAR_MASTER $(master)"
 
 # Debug running program in production mode.
 debug: compile
-	$(ERL) -pa ebin deps/*/ebin -sname debug -remsh $(node)@`hostname -s`
+	ssh $(host) -p $(port) -t to_erl /tmp/
 
 # Launch a shell for client.
 client: compile
@@ -35,7 +38,7 @@ client: compile
 
 # Make a textual log snapshot.
 log:
-	priv/script/dump-log.escript $(node)`date "-sasl-+%Y%m%dT%H%M%S.log"` priv/log/$(node)@`hostname -s`
+	priv/script/dump-log.escript $(node)
 
 # Perform unit tests.
 check: compile

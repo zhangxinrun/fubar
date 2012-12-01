@@ -32,7 +32,7 @@
 %%
 %% Exports
 %%
--export([start_link/0, log/3, trace/2, dump/2,
+-export([start_link/0, log/3, trace/2, dump/0, dump/2,
 		 open/1, close/1, show/1, hide/1, interval/1, state/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
@@ -41,7 +41,8 @@
 -spec start_link() -> {ok, pid()} | {error, reason()}.
 start_link() ->
 	State = ?PROPS_TO_RECORD(fubar:settings(?MODULE), ?MODULE),
-	Path = filename:join(State#?MODULE.dir, io_lib:format("~s", [node()])),
+	[Name | _] = string:tokens(lists:flatten(io_lib:format("~s", [node()])), "@"),
+	Path = filename:join(State#?MODULE.dir, Name),
 	ok = filelib:ensure_dir(Path++"/"),
 	gen_server:start({local, ?MODULE}, ?MODULE, State#?MODULE{dir=Path}, []).
 
@@ -71,21 +72,27 @@ trace(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, via={Via, T3}, pa
 									   {Via, timer:now_diff(Now, T3)/1000}},
 							   {payload, Payload}}).
 
-%% @doc Dump a log class as a text file.
--spec dump(atom(), string()) -> ok.
-dump(Class, Path) ->
+%% @doc Dump all log classes to text log files.
+dump() ->
+	case state() of
+		#?MODULE{dir=Dir, classes=Classes} ->
+			[Name | _] = string:tokens(lists:flatten(io_lib:format("~s", [node()])), "@"),
+			{{Y, M, D}, {H, Min, S}} = calendar:universal_time(),
+			Base = io_lib:format("~s-~4..0B~2..0B~2..0BT~2..0B~2..0B~2..0B-",
+								 [Name, Y, M, D, H, Min, S]),
+			lists:map(fun({Class, _, _}) ->
+							  Filename = io_lib:format("~s~s.log", [Base, Class]),
+							  {Class, catch dump(Dir, Class, lists:flatten(Filename))}
+					  end, Classes);
+		Error ->
+			Error
+	end.
+
+%% @doc Dump a log class to a text log file.
+dump(Class, Filename) ->
 	case state() of
 		#?MODULE{dir=Dir} ->
-			case file:open(Path, [write]) of
-				{ok, File} ->
-					LogFile = filename:join(Dir, io_lib:format("~s", [Class])),
-					disk_log:open([{name, Class}, {file, LogFile}]),
-					consume_log(Class, start, File),
-					disk_log:close(Class),
-					file:close(File);
-				Error1 ->
-					Error1
-			end;
+			dump(Dir, Class, Filename);
 		Error ->
 			Error
 	end.
@@ -212,10 +219,26 @@ consume_log(Log, Last, Io) ->
 				null ->
 					start;
 				_ ->
-					Print = fun(Term) -> io:format(Io, "~p~n", [Term]) end,
+					Print = fun(Term) -> io:format(Io, "~p~n~n", [Term]) end,
 					lists:foreach(Print, Terms)
 			end,
 			consume_log(Log, Current, Io)
+	end.
+
+dump(Dir, Class, Filename) ->
+	Path = filename:join(Dir, io_lib:format("~s", [Class])),
+	case disk_log:open([{name, Class}, {file, Path}, {type, wrap}]) of
+		{error, Reason} ->
+			{error, Reason};
+		_ ->
+			case file:open(Filename, [write]) of
+				{ok, File} ->
+					consume_log(Class, start, File),
+					file:close(File);
+				Error1 ->
+					Error1
+			end,
+			disk_log:close(Class)
 	end.
 
 %%

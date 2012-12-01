@@ -41,7 +41,8 @@
 start() ->
 	application:load(?MODULE),
 	Settings = ?PROPS_TO_RECORD(settings(fubar_log), settings),
-	Path = filename:join(Settings#settings.dir, io_lib:format("~s", [node()])),
+	[Name | _] = string:tokens(lists:flatten(io_lib:format("~s", [node()])), "@"),
+	Path = filename:join(Settings#settings.dir, Name),
 	ok = filelib:ensure_dir(Path++"/"),
 	error_logger:add_report_handler(
 	  log_mf_h, log_mf_h:init(Path, Settings#settings.max_bytes, Settings#settings.max_files)),

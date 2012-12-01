@@ -31,7 +31,7 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	
 	Note) If you want to more than one broker node in a computer,
 	You have to use different node name and listen port as:
-	$ make test master_node=name@host node=other mqtt_port=1884
+	$ make test master=name@host node=other mqtt_port=1884
 	
 2. Using account control
 	Modify {auth, undefined} in src/fubar.app.src as {auth, mqtt_account}.
@@ -55,26 +55,43 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 4. Starting a broker in daemon mode
 	Use 'run' instead of 'test'.
 	$ make run
+	
+	Note) You may not start more than one daemon in a machine.
 
-5. Accessing shell of a running daemon
+5. Getting a daemon shell
 	$ make debug
 	
-6. Dumping log as a text file
-	$ make log
+	If you are debuggin from remote machine (port defaults to ssh 22):
+	$ make debug host=xxx.xxx.xxx.xxx port=xx
 	
-7. Broker state is preserved
+6. Broker state is preserved
 	The broker restores all the state -- accounts, topics and subscriptions - on restart.
 	To clear this state, do:
 	$ make reset
+		
+7. Dumping logs to text files
+	SASL logs can be taken as:
+	$ make log
 	
-8. Understanding trace logs
-	(fubar@host)1> {'PROFILE', <<"c2">>},
-	               {"since origin", <<"c1">>, 2.01}	% millisec from c1 to c2
-	               {"since from", <<"t1">>, 1.55}	% millisec from t1 to c2
-	               {"since via", <<"t1">>, 1.55}	% t1 is the last message handler
+	Other logs such as trace, error, warning, info and debug can be taken from the shell as:
+	(fubar@host)1> fubar_log:dump(trace, "trace.log").
 	
-9. Changing log level
-	Uncomment {d, 'DEBUG'} in rebar.config and rebuild everything by:
-	$ make clean
-	$ make deps
-	$ make
+8. Log management
+	Start up log classes can be controlled in the fubar application meta file, src/fubar.app.src.
+	~         {fubar_log, [{dir, "priv/log"},
+	~                      {max_bytes, 10485760},
+	~                      {max_files, 10},
+	~                      {classes, [trace, error]}
+	~                     ]},
+	
+	Other log classes - warning, info or debug - can be turned on/off by putting
+	them in the meta file or at runtime by calling fubar_log:open/1.
+	(fubar@host)1> fubar_log:open(debug).
+	
+	After turning a log class on, fubar_log:show/1, fubar_log:hide/1 controls
+	whether or not to print the log in the shell.
+	(fubar@host)2> fubar_log:show(debug).
+	(fubar@host)3> fubar_log:hide(trace).
+	
+	Without regard to the show/hide status of a log class, logs in the class
+	are stored in filesystem until fubar_log:close/1 is called.
