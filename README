@@ -64,6 +64,10 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	If you are debuggin from remote machine (port defaults to ssh 22):
 	$ make debug host=xxx.xxx.xxx.xxx port=xx
 	
+	Note) The debug shell is closely bound with the daemon.  If you exit from
+	the debug shell in a normal way, the daemon will stop.  Close or kill the
+	debug shell process (ssh) to prevent the daemon from being terminated.
+	
 6. Broker state is preserved
 	The broker restores all the state -- accounts, topics and subscriptions - on restart.
 	To clear this state, do:
@@ -73,7 +77,10 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	SASL logs can be taken as:
 	$ make log
 	
-	Other logs such as trace, error, warning, info and debug can be taken from the shell as:
+	SASL logs show events happened in the start-up process and events not dealt with
+	by the application.
+	
+	Application logs such as trace, error, warning, info and debug can be taken from the shell as:
 	(fubar@host)1> fubar_log:dump(trace, "trace.log").
 	
 8. Log management
