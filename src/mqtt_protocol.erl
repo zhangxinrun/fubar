@@ -111,9 +111,19 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOpt
 	fubar_log:log(info, ?MODULE, ["connection from", PeerAddr, PeerPort]),
 	case Dispatch:init(Context) of
 		{reply, Reply, NewContext, Timeout} ->
-			Transport:send(Socket, format(Reply)),
-			inet:setopts(Socket, SocketOptions ++ [{active, once}]),
-			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+			Data = format(Reply),
+			fubar_log:log(debug, ?MODULE, ["sending", Data]),
+			case catch Transport:send(Socket, Data) of
+				ok ->
+					inet:setopts(Socket, SocketOptions ++ [{active, once}]),
+					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+				{error, Reason} ->
+					fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
+					{stop, normal};
+				Exit ->
+					fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
+					{stop, normal}
+			end;
 		{reply_later, Reply, NewContext, Timeout} ->
 			gen_server:cast(self(), {send, Reply}),
 			inet:setopts(Socket, SocketOptions ++ [{active, once}]),
@@ -141,10 +151,10 @@ handle_cast({send, Message}, State=#?MODULE{transport=Transport,
 			{noreply, State, Timeout};
 		{error, Reason} ->
 			fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
-			{stop, normal, State};
+			{stop, normal, State#?MODULE{socket=undefined}};
 		Exit ->
 			fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
-			{stop, Exit, State}
+			{stop, normal, State#?MODULE{socket=undefined}}
 	end;
 handle_cast(stop, State) ->
 	{stop, normal, State};
@@ -185,10 +195,10 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 							{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 						{error, Reason} ->
 							fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
-							{stop, normal, State};
+							{stop, normal, State#?MODULE{socket=undefined}};
 						Exit ->
 							fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
-							{stop, normal, State}
+							{stop, normal, State#?MODULE{socket=undefined}}
 					end;
 				{reply_later, Reply, NewContext, NewTimeout} ->
 					gen_server:cast(self(), {send, Reply}),
@@ -211,7 +221,6 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 
 %% Socket close detected.
 handle_info({tcp_closed, Socket}, State=#?MODULE{socket=Socket}) ->
-	fubar_log:log(debug, ?MODULE, "socket closed"),
 	{stop, normal, State#?MODULE{socket=undefined}};
 
 %% Invoke dispatcher to handle all the other events.
@@ -226,10 +235,10 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 					{noreply, State#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 				{error, Reason} ->
 					fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
-					{stop, normal, State};
+					{stop, normal, State#?MODULE{socket=undefined}};
 				Exit ->
 					fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
-					{stop, normal, State}
+					{stop, normal, State#?MODULE{socket=undefined}}
 			end;
 		{reply_later, Reply, NewContext, NewTimeout} ->
 			gen_server:cast(self(), {send, Reply}),
@@ -241,13 +250,13 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 	end.
 
 %% Termination logic.
-terminate(_Reason, #?MODULE{transport=Transport, socket=Socket,
+terminate(Reason, #?MODULE{transport=Transport, socket=Socket,
 						  dispatch=Dispatch, context=Context}) ->
 	case Socket of
 		undefined ->
-			ok;
+			fubar_log:log(info, ?MODULE, ["socket closed", Reason]);
 		_ ->
-			fubar_log:log(debug, ?MODULE, ["closing socket"]),
+			fubar_log:log(info, ?MODULE, ["closing socket", Reason]),
 			Transport:close(Socket)
 	end,
 	Dispatch:terminate(Context).

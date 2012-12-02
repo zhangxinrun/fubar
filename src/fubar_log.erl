@@ -51,9 +51,9 @@ start_link() ->
 %% @sample fubar_log:log(debug, my_module, Term).
 -spec log(atom(), term(), term()) -> ok | {error, reason()}.
 log(Class, Tag, Term) ->
-	Now = now(),
-	Calendar = calendar:now_to_universal_time(Now),
-	Timestamp = httpd_util:rfc1123_date(Calendar),
+	{{Y, M, D}, {H, Min, S}} = calendar:universal_time(),
+	Timestamp = lists:flatten(io_lib:format("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B",
+											[Y, M, D, H, Min, S])),
 	catch disk_log:log(Class, {{Class, Timestamp}, {Tag, self()}, Term}).
 
 %% @doc Leave a special trace type log.
@@ -147,49 +147,42 @@ init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=Classes, interval
 		   end,
 	{ok, State#?MODULE{classes=lists:foldl(Open, [], Classes)}, T}.
 
-handle_call({open, Class}, _, State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, interval=T}) ->
-	case open(Class, Dir, L, N) of
-		{ok, _} ->
+handle_call({open, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
+	case open(Class, State#?MODULE.dir, State#?MODULE.max_bytes, State#?MODULE.max_files) of
+		{ok, NewClass} ->
 			?INFO(["disk_log open", Class]),
-			{reply, ok, State, T};
+			{reply, ok, State#?MODULE{classes=[NewClass | Classes]}, T};
 		Error ->
 			?ERROR(["can't open disk_log", Class]),
 			{reply, Error, State, T}
 	end;
 handle_call({close, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
-	case disk_log:close(Class) of
-		ok ->
-			?INFO(["disk_log closed", Class]),
-			NewClasses = case lists:keytake(Class, 1, Classes) of
-							 {value, {Class, _, _}, Rest} -> Rest;
-							 false -> Classes
-						 end,
-			{reply, ok, State#?MODULE{classes=NewClasses}, T};
-		Error ->
-			?ERROR(["can't close disk_log", Class]),
-			{reply, Error, State, T}
+	case lists:keytake(Class, 1, Classes) of
+		{value, {Class, _, _}, Rest} ->
+			case disk_log:close(Class) of
+				ok ->
+					?INFO(["disk_log closed", Class]),
+					{reply, ok, State#?MODULE{classes=Rest}, T};
+				Error ->
+					?ERROR(["can't close disk_log", Class]),
+					{reply, Error, State, T}
+			end;
+		false ->
+			{reply, {error, not_found}, State, T}
 	end;
 handle_call({show, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 	case lists:keytake(Class, 1, Classes) of
-		{value, {Class, Last, null}, Rest} ->
-			{ok, Current} = consume_log(Class, Last, null),
+		{value, {Class, Current, _}, Rest} ->
 			{reply, ok, State#?MODULE{classes=[{Class, Current, standard_io} | Rest]}, T};
-		{value, {Class, _, _}, _} ->
-			{reply, ok, State, T};
 		false ->
-			case consume_log(Class, start, null) of
-				{ok, Current} ->
-					{reply, ok, State#?MODULE{classes=[{Class, Current, standard_io} | Classes]}, T};
-				Error ->
-					{reply, Error, State, T}
-			end
+			{reply, {error, not_found}, State, T}
 	end;
 handle_call({hide, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 	case lists:keytake(Class, 1, Classes) of
-		{value, {Class, _, _}, Rest} ->
-			{reply, ok, State#?MODULE{classes=Rest}, T};
+		{value, {Class, Current, _}, Rest} ->
+			{reply, ok, State#?MODULE{classes=[{Class, Current, null} | Rest]}, T};
 		false ->
-			{reply, ok, State, T}
+			{reply, {error, not_found}, State, T}
 	end;
 handle_call({interval, T}, _, State=#?MODULE{interval=_}) ->
 	{reply, ok, State#?MODULE{interval=T}, T};
