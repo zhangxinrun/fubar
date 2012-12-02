@@ -22,7 +22,7 @@ test: compile
 # Start the program in production mode.
 run: compile
 	mkdir -p priv/data
-	mkdir -p /tmp/
+	mkdir -p /tmp/$(node)
 	run_erl -daemon /tmp/$(node)/ $(CURDIR)/priv/log/$(node) \
 	"$(ERL) -pa $(CURDIR)/ebin $(CURDIR)/deps/*/ebin +A 100 +K true +P 1000000 +W w -boot start_sasl \
 	-sname $(node) -s $(APP) -mnesia dir '\"$(CURDIR)/priv/data/$(node)\"' \
@@ -30,7 +30,7 @@ run: compile
 
 # Debug running program in production mode.
 debug: compile
-	ssh $(host) -p $(port) -t to_erl /tmp/
+	ssh $(host) -p $(port) -t to_erl /tmp/$(node)/
 
 # Launch a shell for client.
 client: compile
