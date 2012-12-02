@@ -84,12 +84,28 @@ start(Props) ->
 	gen_server:start(?MODULE, State, []).
 
 %% @doc State query.
-state(Topic) ->
-	gen_server:call(Topic, state).
+state(Topic) when is_pid(Topic) ->
+	gen_server:call(Topic, state);
+state(Name) ->
+	case fubar_route:resolve(Name) of
+		{ok, {undefined, ?MODULE}} ->
+			{error, inactive};
+		{ok, {Topic, ?MODULE}} ->
+			state(Topic);
+		Error ->
+			Error
+	end.
 
 %% @doc Start or stop tracing.
-trace(Topic, Value) ->
-	gen_server:call(Topic, {trace, Value}).
+trace(Topic, Value) when is_pid(Topic) ->
+	gen_server:call(Topic, {trace, Value});
+trace(Name, Value) ->
+	case fubar_route:ensure(Name, ?MODULE) of
+		{ok, Topic} ->
+			trace(Topic, Value);
+		Error ->
+			Error
+	end.
 
 init(State=#?MODULE{name=Name}) ->
 	fubar_log:log(resource, ?MODULE, [Name, init]),

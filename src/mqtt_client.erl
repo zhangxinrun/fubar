@@ -45,7 +45,8 @@
 %%
 %% Exports
 %%
--export([start/1, stop/1, batch_start/2, batch_stop/1, batch_restart/1, start_link/1, state/1]).
+-export([start/1, stop/1, batch_start/2, batch_start_after/3, batch_stop/1, batch_restart/1,
+		 start_link/1, state/1]).
 -export([init/1, handle_message/2, handle_event/2, terminate/1]).
 
 %% @doc Start an MQTT client with parameters.
@@ -70,6 +71,11 @@ stop(Client) ->
 batch_start(ClientIds, Props) ->
 	mqtt_client_sup:start_link(),
 	[mqtt_client_sup:start_child([{client_id, ClientId} | Props]) || ClientId <- ClientIds].
+
+-spec batch_start_after([binary()], timeout(), proplist(atom(), term())) -> [{ok, pid()} | {error, reason()}].
+batch_start_after(ClientIds, Millisec, Props) ->
+	mqtt_client_sup:start_link(),
+	[mqtt_client_sup:start_child_after(Millisec, [{client_id, ClientId} | Props]) || ClientId <- ClientIds].
 
 -spec batch_stop([binary()]) -> [ok].
 batch_stop(ClientIds) ->

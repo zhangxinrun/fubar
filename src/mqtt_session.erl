@@ -38,7 +38,7 @@
 				  transaction_timeout = 60000 :: timeout(),
 				  message_id = 0 :: integer(),
 				  buffer = [] :: [#fubar{}],
-				  buffer_limit = 10 :: integer(),
+				  buffer_limit = 3 :: integer(),
 				  retry_pool = [] :: [{integer(), #fubar{}, integer(), term()}],
 				  max_retries = 5 :: integer(),
 				  retry_after = 10000 :: timeout(),
