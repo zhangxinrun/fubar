@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -sname dump-log
+%%! -pa ebin deps/*/ebin -sname dump-log
 main([Prefix]) ->
 	% Find log dir and settings.
 	application:load(fubar),
