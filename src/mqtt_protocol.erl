@@ -108,11 +108,11 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOpt
 					dispatch=Dispatch, context=Context}) ->
 	% Leave access log.
 	{ok, {PeerAddr, PeerPort}} = inet:peername(Socket),
-	fubar_log:log(info, ?MODULE, ["connection from", PeerAddr, PeerPort]),
+	fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
 	case Dispatch:init(Context) of
 		{reply, Reply, NewContext, Timeout} ->
 			Data = format(Reply),
-			fubar_log:log(debug, ?MODULE, ["sending", Data]),
+			fubar_log:log(packet, ?MODULE, ["sending", Data]),
 			case catch Transport:send(Socket, Data) of
 				ok ->
 					inet:setopts(Socket, SocketOptions ++ [{active, once}]),
@@ -137,7 +137,7 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOpt
 
 %% Fallback
 handle_call(Request, From, State=#?MODULE{timeout=Timeout}) ->
-	fubar_log:log(debug, ?MODULE, ["unknown call", Request, From]),
+	fubar_log:log(noise, ?MODULE, ["unknown call", Request, From]),
 	{reply, {error, unknown}, State, Timeout}.
 
 %% Async administrative commands.
@@ -145,7 +145,7 @@ handle_cast({send, Message}, State=#?MODULE{transport=Transport,
 											socket=Socket,
 											timeout=Timeout}) ->
 	Data = format(Message),
-	fubar_log:log(debug, ?MODULE, ["sending", Data]),
+	fubar_log:log(packet, ?MODULE, ["sending", Data]),
 	case catch Transport:send(Socket, Data) of
 		ok ->
 			{noreply, State, Timeout};
@@ -161,7 +161,7 @@ handle_cast(stop, State) ->
 
 %% Fallback
 handle_cast(Message, State=#?MODULE{timeout=Timeout}) ->
-	fubar_log:log(debug, ?MODULE, ["unknown cast", Message]),
+	fubar_log:log(noise, ?MODULE, ["unknown cast", Message]),
 	{noreply, State, Timeout}.
 
 % Ignore pointless message from the listener.
@@ -177,7 +177,7 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 		<<>> ->
 			ok;
 		_ ->
-			fubar_log:log(debug, ?MODULE, ["received", Data])
+			fubar_log:log(packet, ?MODULE, ["received", Data])
 	end,
 	% Append the packet at the end of the buffer and start parsing.
 	case parse(State#?MODULE{buffer= <<Buffer/binary, Data/binary>>}) of
@@ -187,7 +187,7 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			case Dispatch:handle_message(Message, Context) of
 				{reply, Reply, NewContext, NewTimeout} ->
 					Data1 = format(Reply),
-					fubar_log:log(debug, ?MODULE, ["sending", Data1]),
+					fubar_log:log(packet, ?MODULE, ["sending", Data1]),
 					case catch Transport:send(Socket, Data1) of
 						ok ->
 							% Simulate new tcp data to trigger next parsing schedule.
@@ -215,7 +215,7 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			inet:setopts(Socket, [{active, once}]),
 			{noreply, NewState, Timeout};
 		{error, Reason, NewState} ->
-			fubar_log:log(warning, ?MODULE, ["parse error", Reason]),
+			fubar_log:log(packet, ?MODULE, ["parse error", Reason]),
 			{stop, normal, NewState}
 	end;
 
@@ -229,7 +229,7 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 	case Dispatch:handle_event(Info, Context) of
 		{reply, Reply, NewContext, NewTimeout} ->
 			Data = format(Reply),
-			fubar_log:log(debug, ?MODULE, ["sending", Data]),
+			fubar_log:log(packet, ?MODULE, ["sending", Data]),
 			case catch Transport:send(Socket, Data) of
 				ok ->
 					{noreply, State#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
@@ -254,9 +254,9 @@ terminate(Reason, #?MODULE{transport=Transport, socket=Socket,
 						  dispatch=Dispatch, context=Context}) ->
 	case Socket of
 		undefined ->
-			fubar_log:log(info, ?MODULE, ["socket closed", Reason]);
+			fubar_log:log(access, ?MODULE, ["socket closed", Reason]);
 		_ ->
-			fubar_log:log(info, ?MODULE, ["closing socket", Reason]),
+			fubar_log:log(access, ?MODULE, ["closing socket", Reason]),
 			Transport:close(Socket)
 	end,
 	Dispatch:terminate(Context).

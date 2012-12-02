@@ -92,7 +92,7 @@ trace(Topic, Value) ->
 	gen_server:call(Topic, {trace, Value}).
 
 init(State=#?MODULE{name=Name}) ->
-	?DEBUG([init, Name]),
+	fubar_log:log(resource, ?MODULE, [Name, init]),
 	% Restore all the subscriptions and retained message from database.
 	process_flag(trap_exit, true),
 	Subscribers = mnesia:dirty_read(mqtt_subscriber, Name),
@@ -127,7 +127,7 @@ handle_call(Fubar=#fubar{payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MO
 			end,
 			{reply, {ok, QoS}, State#?MODULE{subscribers=Subscribers}};
 		_ ->
-			?WARNING([Name, "not mine", Fubar]),
+			fubar_log:log(warning, ?MODULE, [Name, "not mine", Fubar]),
 			{reply, ok, State}
 	end;
 
@@ -139,13 +139,13 @@ handle_call(Fubar=#fubar{payload=unsubscribe}, _, State=#?MODULE{name=Name}) ->
 			Subscribers = unsubscribe(Name, fubar:get(from, Fubar), State#?MODULE.subscribers),
 			{reply, ok, State#?MODULE{subscribers=Subscribers}};
 		_ ->
-			?WARNING([Name, "not mine", Fubar]),
+			fubar_log:log(warning, ?MODULE, [Name, "not mine", Fubar]),
 			{reply, ok, State}
 	end;
 
 %% Fallback
 handle_call(Request, From, State) ->
-	?WARNING([State#?MODULE.name, Request, From, "dropping unknown call"]),
+	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown call", Request, From]),
 	{reply, ok, State}.
 
 %% Publish request.
@@ -163,31 +163,31 @@ handle_cast(Fubar=#fubar{payload=#mqtt_publish{}}, State=#?MODULE{name=Name, tra
 					{noreply, State#?MODULE{subscribers=Subscribers}}
 			end;
 		_ ->
-			?WARNING([Name, "not mine", Fubar]),
+			fubar_log:log(warning, ?MODULE, [Name, "not mine", Fubar]),
 			{noreply, State}
 	end;
 
 %% Fallback
 handle_cast(Message, State) ->
-	?WARNING([State#?MODULE.name, Message, "dropping unknown cast"]),
+	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown cast", Message]),
 	{noreply, State}.
 
 %% Likely to be a subscriber down event
-handle_info({'EXIT', Pid, Reason}, State) ->
+handle_info({'EXIT', Pid, Reason}, State=#?MODULE{name=Name}) ->
 	case lists:keytake(Pid, 3, State#?MODULE.subscribers) of
 		{value, {ClientId, QoS, Pid, Module}, Subscribers} ->
 			{noreply, State#?MODULE{subscribers=[{ClientId, QoS, undefined, Module} | Subscribers]}};
 		false ->
-			?WARNING([State#?MODULE.name, Pid, Reason, "unknown exit signal"]),
+			fubar_log:log(noise, ?MODULE, [Name, "unknown exit", Pid, Reason]),
 			{noreply, State}
 	end;
 %% Fallback
 handle_info(Info, State) ->
-	?WARNING([State#?MODULE.name, Info, "dropping unknown info"]),
+	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown info", Info]),
 	{noreply, State}.
 
 terminate(Reason, #?MODULE{name=Name}) ->
-	?DEBUG([Name, Reason, terminate]),
+	fubar_log:log(resource, ?MODULE, [Name, terminate, Reason]),
 	fubar_route:down(Name),
 	Reason.
 	
@@ -228,7 +228,7 @@ publish(Name, Fubar, Subscribers, Trace) ->
 									catch gen_server:cast(Addr, Fubar2),
 									{ClientId, MaxQoS, Addr, Module};
 								_ ->
-									?ERROR([Name, ClientId, "cannot ensure subscriber, something wrong"]),
+									fubar_log:log(warning, ?MODULE, [Name, "can't ensure a subscriber", ClientId]),
 									{ClientId, MaxQoS, undefined, Module}
 							end;
 						_ ->
