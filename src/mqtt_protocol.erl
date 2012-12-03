@@ -64,9 +64,14 @@ start(Props) ->
 		  {ok, pid()} | {error, reason()}.
 start_link(Listener, Socket, Transport, Options) ->
 	% Apply settings from the application metadata.
-	Settings = fubar:settings(?MODULE),
-	State = ?PROPS_TO_RECORD(Settings ++ Options, ?MODULE),
-	gen_server:start_link(?MODULE, State#?MODULE{listener=Listener, socket=Socket, transport=Transport}, []).
+	case fubar_alarm:is_alarmed() of
+		true ->
+			{error, overload};
+		_ ->
+			Settings = fubar:settings(?MODULE),
+			State = ?PROPS_TO_RECORD(Settings ++ Options, ?MODULE),
+			gen_server:start_link(?MODULE, State#?MODULE{listener=Listener, socket=Socket, transport=Transport}, [])
+	end.
 
 %% @doc Stop the process.
 -spec stop(pid()) -> ok | {error, reason()}.

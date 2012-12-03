@@ -80,8 +80,17 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	SASL logs show events happened in the start-up process and events not dealt with
 	by the application.
 	
-	Application logs such as trace, error, warning, info and debug can be taken from the shell as:
+	Application logs can be taken from the shell as:
 	(fubar@host)1> fubar_log:dump(trace, "trace.log").
+	
+	Log classes are:
+	- packet	% bytes sent and received by the broker
+	- protocol	% mqtt messages sent and received by the broker
+	- resource	% long lasting resources such as sessions and topics
+	- trace		% fubar packets marked as trace
+	- warning	% abnormal conditions that are not considered critical
+	- debug		% message put for debugging purpose
+	- noise		% irrelevant events taken but dropped
 	
 8. Log management
 	Start up log classes can be controlled in the fubar application meta file, src/fubar.app.src.

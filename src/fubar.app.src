@@ -13,6 +13,8 @@
                       {max_files, 10},
                       {classes, [access, packet, protocol, resource, trace, warning, debug, noise]}
                      ]},
+         {vm_memory_monitor, [{high_watermark, 0.4},
+                              {low_watermark, 0.38}]},
          {mqtt_protocol, [{max_packet_size, 4096},
                           {dispatch, mqtt_server}
                          ]},

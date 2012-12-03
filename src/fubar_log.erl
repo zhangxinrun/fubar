@@ -247,7 +247,7 @@ consume_log(Log, Last, Io) ->
 				null ->
 					ok;
 				_ ->
-					Print = fun(Term) -> io:format(Io, "~p~n~n", [Term]) end,
+					Print = fun(Term) -> io:format(Io, "~1000p~n", [Term]) end,
 					lists:foreach(Print, Terms)
 			end,
 			consume_log(Log, Current, Io)
