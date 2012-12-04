@@ -128,10 +128,7 @@ init(Props) ->
 
 %% State query for admin operation.
 handle_call(state, _, State) ->
-	case State#?MODULE.alert of
-		true -> {reply, State, State, hibernate};
-		false -> {reply, State, State}
-	end;
+	reply(State, State);
 
 %% Client bind/clean logic for mqtt_server.
 handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=Buffer}) ->
@@ -139,11 +136,7 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=B
 	link(Client),
 	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
-	NewState = State#?MODULE{client=Client, will=Will, buffer=[]},
-	case State#?MODULE.alert of
-		true -> {reply, ok, NewState, hibernate};
-		false -> {reply, ok, NewState}
-	end;
+	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
 handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=Buffer}) ->
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "linking", Client, "and killing", OldClient]),
 	catch unlink(OldClient),
@@ -151,42 +144,23 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=B
 	link(Client),
 	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
-	NewState = State#?MODULE{client=Client, will=Will, buffer=[]},
-	case State#?MODULE.alert of
-		true -> {reply, ok, NewState, hibernate};
-		false -> {reply, ok, NewState}
-	end;
+	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
 handle_call({trace, Value}, _, State) ->
-	NewState = State#?MODULE{trace=Value},
-	case State#?MODULE.alert of
-		true -> {reply, ok, NewState, hibernate};
-		false -> {reply, ok, NewState}
-	end;
+	reply(ok, State#?MODULE{trace=Value});
 handle_call(clean, _, State) ->
-	NewState = State#?MODULE{clean=true},
-	case State#?MODULE.alert of
-		true -> {reply, ok, NewState, hibernate};
-		false -> {reply, ok, NewState}
-	end;
+	reply(ok, State#?MODULE{clean=true});
 
 %% Fallback
 handle_call(Request, From, State) ->
 	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown call", Request, From]),
-	case State#?MODULE.alert of
-		true -> {reply, ok, State, hibernate};
-		false -> {reply, ok, State}
-	end.
+	reply(ok, State).
 
 %% Message delivery logic to the client.
 handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=undefined, buffer=Buffer, buffer_limit=N}) ->
 	% Got a message to deliver to the client.
 	% But it's offline now, keep the message in buffer for later delivery.
 	fubar_log:trace(ClientId, Fubar),
-	NewState = State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N)},
-	case State#?MODULE.alert of
-		true -> {noreply, NewState, hibernate};
-		false -> {noreply, NewState}
-	end;
+	noreply(State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N)});
 handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=Client}) ->
 	% Got a message and the client is alive.
 	% Let's send it to the client.
@@ -196,10 +170,7 @@ handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=Client}) ->
 			case Message#mqtt_publish.qos of
 				at_most_once ->
 					Client ! Message,
-					case State#?MODULE.alert of
-						true -> {noreply, State, hibernate};
-						false -> {noreply, State}
-					end;
+					noreply(State);
 				_ ->
 					MessageId = (State#?MODULE.message_id rem 16#ffff) + 1,
 					NewMessage= Message#mqtt_publish{message_id=MessageId},
@@ -207,34 +178,24 @@ handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=Client}) ->
 					{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
 					Dup = NewMessage#mqtt_publish{dup=true},
 					Pool = [{MessageId, fubar:set([{payload, Dup}], Fubar), 1, Timer} | State#?MODULE.retry_pool],
-					NewState = State#?MODULE{message_id=MessageId, retry_pool=Pool},
-					case State#?MODULE.alert of
-						true -> {noreply, NewState, hibernate};
-						false -> {noreply, NewState}
-					end
+					noreply(State#?MODULE{message_id=MessageId, retry_pool=Pool})
 			end;
 		Unknown ->
 			fubar_log:log(noise, ?MODULE, [ClientId, "unknown fubar", Unknown]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 
 handle_cast({alert, true}, State) ->
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "alert set"]),
-	{noreply, State#?MODULE{alert=true}, hibernate};
+	noreply(State#?MODULE{alert=true});
 handle_cast({alert, false}, State) ->
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "alert unset"]),
-	{noreply, State#?MODULE{alert=false}};
+	noreply(State#?MODULE{alert=false});
 
 %% Fallback
 handle_cast(Message, State) ->
 	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown cast", Message]),
-	case State#?MODULE.alert of
-		true -> {noreply, State, hibernate};
-		false -> {noreply, State}
-	end.
+	noreply(State).
 
 %% Message delivery logic to the client (QoS retry).
 handle_info({retry, MessageId}, State=#?MODULE{client=undefined, buffer=Buffer, buffer_limit=N}) ->
@@ -245,25 +206,14 @@ handle_info({retry, MessageId}, State=#?MODULE{client=undefined, buffer=Buffer, 
 		{value, {MessageId, Fubar, Retry, _}, Pool} ->
 			case Retry < State#?MODULE.max_retries of
 				true ->
-					NewState = State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N, retry_pool=Pool)},
-					case State#?MODULE.alert of
-						true -> {noreply, NewState, hibernate};
-						false -> {noreply, NewState}
-					end;
+					noreply(State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N, retry_pool=Pool)});
 				_ ->
 					fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "dropping after retry", Fubar]),
-					NewState = State#?MODULE{retry_pool=Pool},
-					case State#?MODULE.alert of
-						true -> {noreply, NewState, hibernate};
-						false -> {noreply, NewState}
-					end
+					noreply(State#?MODULE{retry_pool=Pool})
 			end;
 		_ ->
 			fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info({retry, MessageId}, State=#?MODULE{client=Client}) ->
 	% Retry schedule arrived.
@@ -274,25 +224,14 @@ handle_info({retry, MessageId}, State=#?MODULE{client=Client}) ->
 				true ->
 					Client ! fubar:get(payload, Fubar),
 					{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
-					NewState = State#?MODULE{retry_pool=[{MessageId, Fubar, Retry+1, Timer} | Pool]},
-					case State#?MODULE.alert of
-						true -> {noreply, NewState, hibernate};
-						false -> {noreply, NewState}
-					end;
+					noreply(State#?MODULE{retry_pool=[{MessageId, Fubar, Retry+1, Timer} | Pool]});
 				_ ->
 					fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "dropping after retry", Fubar]),
-					NewState = State#?MODULE{retry_pool=Pool},
-					case State#?MODULE.alert of
-						true -> {noreply, NewState, hibernate};
-						false -> {noreply, NewState}
-					end
+					noreply(State#?MODULE{retry_pool=Pool})
 			end;
 		_ ->
 			fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 
 %% Transaction logic from the client.
@@ -305,10 +244,7 @@ handle_info(Info=#mqtt_publish{message_id=MessageId, dup=true}, State) ->
 		{MessageId, _, _} ->
 			% Found one, drop this.
 			fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info(Info=#mqtt_publish{message_id=MessageId},
 			State=#?MODULE{name=ClientId, transactions=Transactions, transaction_timeout=Timeout, trace=Trace}) ->
@@ -318,27 +254,16 @@ handle_info(Info=#mqtt_publish{message_id=MessageId},
 			State#?MODULE.client ! #mqtt_pubrec{message_id=MessageId},
 			Worker = proc_lib:spawn_link(?MODULE, transaction_loop, [ClientId, Info, Timeout, Trace]),
 			Complete = #mqtt_pubcomp{message_id=MessageId},
-			NewState = State#?MODULE{transactions=[{MessageId, Worker, Complete} | Transactions]},
-			case State#?MODULE.alert of
-				true -> {noreply, NewState, hibernate};
-				false -> {noreply, NewState}
-			end;
+			noreply(State#?MODULE{transactions=[{MessageId, Worker, Complete} | Transactions]});
 		at_least_once ->
 			% Start 1-way handshake transaction.
 			Worker = proc_lib:spawn_link(?MODULE, transaction_loop, [ClientId, Info, Timeout, Trace]),
 			Worker ! release,
 			State#?MODULE.client ! #mqtt_puback{message_id=MessageId},
-			NewState = State#?MODULE{transactions=[{MessageId, Worker, undefined} | Transactions]},
-			case State#?MODULE.alert of
-				true -> {noreply, NewState, hibernate};
-				false -> {noreply, NewState}
-			end;
+			noreply(State#?MODULE{transactions=[{MessageId, Worker, undefined} | Transactions]});
 		_ ->
 			catch do_transaction(ClientId, Info, Trace),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info(#mqtt_puback{message_id=MessageId}, State=#?MODULE{name=ClientId}) ->
 	% The message id is supposed to be in the retry pool.
@@ -347,17 +272,10 @@ handle_info(#mqtt_puback{message_id=MessageId}, State=#?MODULE{name=ClientId}) -
 		{value, {MessageId, Fubar, _, Timer}, Pool} ->
 			timer:cancel(Timer),
 			fubar_log:trace(ClientId, Fubar),
-			NewState = State#?MODULE{retry_pool=Pool},
-			case State#?MODULE.alert of
-				true -> {noreply, NewState, hibernate};
-				false -> {noreply, NewState}
-			end;
+			noreply(State#?MODULE{retry_pool=Pool});
 		false ->
 			fubar_log:log(warning, ?MODULE, [ClientId, "too late puback for", MessageId]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info(#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{name=ClientId, client=Client}) ->
 	% The message id is supposed to be in the retry pool.
@@ -370,32 +288,19 @@ handle_info(#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{name=ClientId, cl
 			Client ! Reply,
 			Fubar1 = fubar:set([{via, ClientId}, {payload, Reply}], Fubar),
 			{ok, Timer1} = timer:send_after(#?MODULE.retry_after*#?MODULE.max_retries, {retry, MessageId}),
-			NewState = State#?MODULE{retry_pool=[{MessageId, Fubar1, #?MODULE.max_retries, Timer1} | Pool]},
-			case State#?MODULE.alert of
-				true -> {noreply, NewState, hibernate};
-				false -> {noreply, NewState}
-			end;
+			noreply(State#?MODULE{retry_pool=[{MessageId, Fubar1, #?MODULE.max_retries, Timer1} | Pool]});
 		false ->
 			fubar_log:log(warning, ?MODULE, [ClientId, "too late pubrec for", MessageId]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info(#mqtt_pubrel{message_id=MessageId}, State=#?MODULE{name=ClientId}) ->
 	case lists:keyfind(MessageId, 1, State#?MODULE.transactions) of
 		false ->
 			fubar_log:log(warning, ?MODULE, [ClientId, "too late pubrel for", MessageId]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end;
+			noreply(State);
 		{MessageId, Worker, _} ->
 			Worker ! release,
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info(#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{name=ClientId}) ->
 	% The message id is supposed to be in the retry pool.
@@ -404,26 +309,16 @@ handle_info(#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{name=ClientId}) 
 		{value, {MessageId, Fubar, _, Timer}, Pool} ->
 			timer:cancel(Timer),
 			fubar_log:trace({ClientId, "PUBCOMP"}, Fubar),
-			NewState = State#?MODULE{retry_pool=Pool},
-			case State#?MODULE.alert of
-				true -> {noreply, NewState, hibernate};
-				false -> {noreply, NewState}
-			end;
+			noreply(State#?MODULE{retry_pool=Pool});
 		false ->
 			fubar_log:log(warning, ?MODULE, [ClientId, "too late pubcomp for", MessageId]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info(#mqtt_subscribe{message_id=MessageId, dup=true}, State) ->
 	% Subscribe is performed synchronously.
 	% Just drop duplicate requests.
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
-	case State#?MODULE.alert of
-		true -> {noreply, State, hibernate};
-		false -> {noreply, State}
-	end;
+	noreply(State);
 handle_info(Info=#mqtt_subscribe{message_id=MessageId},
 			State=#?MODULE{name=ClientId, transaction_timeout=Timeout, trace=Trace}) ->
 	QoSs = do_transaction(ClientId, Info, Timeout, Trace),
@@ -435,19 +330,12 @@ handle_info(Info=#mqtt_subscribe{message_id=MessageId},
 	F = fun({Topic, QoS}, Subscriptions) ->
 				lists:keystore(Topic, 1, Subscriptions, {Topic, QoS})
 		end,
-	NewState = State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, lists:zip(Topics, QoSs))},
-	case State#?MODULE.alert of
-		true -> {noreply, NewState, hibernate};
-		false -> {noreply, NewState}
-	end;
+	noreply(State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, lists:zip(Topics, QoSs))});
 handle_info(#mqtt_unsubscribe{message_id=MessageId, dup=true}, State) ->
 	% Unsubscribe is performed synchronously.
 	% Just drop duplicate requests.
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
-	case State#?MODULE.alert of
-		true -> {noreply, State, hibernate};
-		false -> {noreply, State}
-	end;
+	noreply(State);
 handle_info(Info=#mqtt_unsubscribe{message_id=MessageId, topics=Topics},
 			State=#?MODULE{name=ClientId, transaction_timeout=Timeout, trace=Trace}) ->
 	do_transaction(ClientId, Info, Timeout, Trace),
@@ -458,21 +346,14 @@ handle_info(Info=#mqtt_unsubscribe{message_id=MessageId, topics=Topics},
 	F = fun(Topic, Subscriptions) ->
 				lists:keydelete(Topic, 1, Subscriptions)
 		end,
-	NewState = State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, Topics)},
-	case State#?MODULE.alert of
-		true -> {noreply, NewState, hibernate};
-		false -> {noreply, NewState}
-	end;
+	noreply(State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, Topics)});
 handle_info({'EXIT', Client, Reason}, State=#?MODULE{client=Client}) ->
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "client down", Client, Reason]),
 	case State#?MODULE.clean of
 		true ->
 			{stop, normal, State#?MODULE{client=undefined}};
 		_ ->
-			case State#?MODULE.alert of
-				true -> {noreply, State#?MODULE{client=undefined}, hibernate};
-				false -> {noreply, State#?MODULE{client=undefined}}
-			end
+			noreply(State#?MODULE{client=undefined})
 	end;
 handle_info({'EXIT', Worker, normal}, State=#?MODULE{name=ClientId}) ->
 	% Likely to be a transaction completion signal.
@@ -483,41 +364,26 @@ handle_info({'EXIT', Worker, normal}, State=#?MODULE{name=ClientId}) ->
 				undefined -> ok;
 				_ -> State#?MODULE.client ! Complete
 			end,
-			case State#?MODULE.alert of
-				true -> {noreply, State#?MODULE{transactions=Rest}, hibernate};
-				false -> {noreply, State#?MODULE{transactions=Rest}}
-			end;
+			noreply(State#?MODULE{transactions=Rest});
 		false ->
 			fubar_log:log(noise, ?MODULE, [ClientId, "unknown exit detected", Worker]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 handle_info({'EXIT', Worker, Reason}, State=#?MODULE{name=ClientId}) ->
 	% Likely to be a transaction failure signal.
 	case lists:keytake(Worker, 2, State#?MODULE.transactions) of
 		{value, {MessageId, Worker, _}, Rest} ->
 			fubar_log:log(warning, ?MODULE, [ClientId, "transaction failure", MessageId, Reason]),
-			case State#?MODULE.alert of
-				true -> {noreply, State#?MODULE{transactions=Rest}, hibernate};
-				false -> {noreply, State#?MODULE{transactions=Rest}}
-			end;
+			noreply(State#?MODULE{transactions=Rest});
 		false ->
 			fubar_log:log(warning, ?MODULE, [ClientId, "unknown exit detected", Worker, Reason]),
-			case State#?MODULE.alert of
-				true -> {noreply, State, hibernate};
-				false -> {noreply, State}
-			end
+			noreply(State)
 	end;
 
 %% Fallback
 handle_info(Info, State) ->
 	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown info", Info]),
-	case State#?MODULE.alert of
-		true -> {noreply, State, hibernate};
-		false -> {noreply, State}
-	end.
+	noreply(State).
 
 terminate(Reason, State=#?MODULE{name=ClientId, transaction_timeout=Timeout, trace=Trace}) ->
 	fubar_log:log(resource, ?MODULE, [ClientId, terminate, Reason]),
@@ -558,6 +424,16 @@ transaction_loop(ClientId, Message, Timeout, Trace) ->
 %%
 %% Local
 %%
+reply(Reply, State=#?MODULE{alert=true}) ->
+	{reply, Reply, State, hibernate};
+reply(Reply, State) ->
+	{reply, Reply, State}.
+
+noreply(State=#?MODULE{alert=true}) ->
+	{noreply, State, hibernate};
+noreply(State) ->
+	{noreply, State}.
+	
 do_transaction(ClientId, Message=#mqtt_publish{topic=Name}, Trace) ->
 	Props = [{origin, ClientId}, {from, ClientId}, {to, Name}, {via, ClientId}, {payload, Message}],
 	Fubar = case Trace of
