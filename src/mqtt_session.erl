@@ -16,6 +16,15 @@
 -behavior(gen_server).
 
 %%
+%% Exports
+%%
+-export([start/1,	% start a session without binding
+		 bind/2,	% find or start a session and bind with calling process
+		 clean/1,	% set clean session flag, the session will terminate on unbind
+		 state/1,	% get session state
+		 trace/2]).	% set trace true/false, fubars created by this session are traced
+
+%%
 %% Includes
 %%
 -ifdef(TEST).
@@ -30,34 +39,34 @@
 %%
 %% Records and types
 %%
--record(?MODULE, {name :: binary(),
-				  will :: {binary(), binary(), mqtt_qos(), boolean()},
-				  subscriptions = [] :: [{binary(), mqtt_qos()}],
-				  client :: pid(),
-				  transactions = [] :: [{integer(), pid(), mqtt_message()}],
-				  transaction_timeout = 60000 :: timeout(),
-				  message_id = 0 :: integer(),
-				  buffer = [] :: [#fubar{}],
-				  buffer_limit = 3 :: integer(),
-				  retry_pool = [] :: [{integer(), #fubar{}, integer(), term()}],
-				  max_retries = 5 :: integer(),
-				  retry_after = 10000 :: timeout(),
-				  clean = false :: boolean(),
-				  trace = false :: boolean(),
-				  alert = false :: boolean()}).
+-record(?MODULE, {name :: binary(),	% usually client_id
+				  will :: {binary(), binary(), mqtt_qos(), boolean()},	% {topic, payload, qos, retain}
+				  subscriptions = [] :: [{binary(), mqtt_qos()}],	% [{topic, qos}]
+				  client :: pid(),	% mqtt_server process
+				  transactions = [] :: [{integer(), pid(), mqtt_message()}], % [{message_id, transaction_loop, reply}]
+				  transaction_timeout = 60000 :: timeout(),	% drop transactions not complete in this timeout
+				  message_id = 0 :: integer(),	% last message_id used by this session
+				  buffer = [] :: [#fubar{}],	% fubar buffer for offline client
+				  buffer_limit = 3 :: integer(),	% fubar buffer length
+				  retry_pool = [] :: [{integer(), #fubar{}, integer(), term()}],	% retry pool for downlink transaction
+				  max_retries = 5 :: integer(),	% drop downlink transactions after retry
+				  retry_after = 10000 :: timeout(),	% downlink transactions retry policy
+				  clean = false :: boolean(),	% terminates on client down when this flag is set
+				  trace = false :: boolean(),	% sets trace flag on for fubars created by this session
+				  alert = false :: boolean()}).	% runs gc on every reduction when this flag is set
 
 %%
-%% Exports
+%% Callbacks and internal functions
 %%
--export([start/1, bind/2, clean/1, state/1, trace/2, transaction_loop/4, handle_alert/2]).
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3,
+		 transaction_loop/4, handle_alert/2]).
 
 %% @doc Start an unbound session.
 -spec start(proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
 start(Props) ->
 	gen_server:start(?MODULE, Props, []).
 
-%% @doc Bind a client with existing session or create a new one.
+%% @doc Bind a client to existing session or create a new one.
 -spec bind(term(), proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
 bind(ClientId, Will) ->
 	case fubar_route:resolve(ClientId) of
@@ -118,11 +127,12 @@ trace(Name, Value) ->
 			Error
 	end.
 
+%% Session start-up sequence.
 init(Props) ->
 	State = ?PROPS_TO_RECORD(Props++fubar:settings(?MODULE), ?MODULE),
 	fubar_log:log(resource, ?MODULE, [State#?MODULE.name, init]),
-	fubar_alarm:register({?MODULE, handle_alert, []}),
-	process_flag(trap_exit, true),
+	fubar_alarm:register({?MODULE, handle_alert, []}), % to receive alerts
+	process_flag(trap_exit, true),	% to detect client or transaction down
 	fubar_route:up(State#?MODULE.name, ?MODULE),
 	{ok, State}.
 
@@ -133,7 +143,7 @@ handle_call(state, _, State) ->
 %% Client bind/clean logic for mqtt_server.
 handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=Buffer}) ->
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "linking", Client]),
-	link(Client),
+	link(Client),	% to detect client down and to let client crash when this session down
 	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
@@ -142,7 +152,6 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=B
 	catch unlink(OldClient),
 	exit(OldClient, kill),
 	link(Client),
-	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
 handle_call({trace, Value}, _, State) ->

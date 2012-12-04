@@ -49,7 +49,7 @@
 
 -record(state, {total_memory,
                 memory_limit,
-				memory_safe,
+				memory_safe,	% jinni, to prevent too frequent alarm set/clear
                 timeout,
                 timer,
                 alarmed

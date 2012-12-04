@@ -28,6 +28,7 @@
 
 -record(alarms, {alertees, alarmed_nodes}).
 
+% jinni, using ets for faster alarm state query
 boot() ->
 	ets:new(?MODULE, [ordered_set, public, named_table,
 					  {write_concurrency, false}, {read_concurrency, true}]).
@@ -55,10 +56,9 @@ is_alarmed() ->
 		_ -> true
 	end.
 
+% jinni, a short version of register/2
 register(MFA) ->
-	gen_event:call(alarm_handler, ?MODULE,
-				   {register, self(), MFA},
-				   infinity).
+	?MODULE:register(self(), MFA).
 
 register(Pid, HighMemMFA) ->
     gen_event:call(alarm_handler, ?MODULE,
