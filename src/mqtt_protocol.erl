@@ -83,44 +83,61 @@ stop(Pid) ->
 %%
 
 %% Initialize the protocol in client mode.
-init(State=#?MODULE{host=Host, port=Port, transport=Transport, socket=undefined,
-					socket_options=SocketOptions, dispatch=Dispatch, context=Context}) ->
-	case Transport:connect(Host, Port, SocketOptions) of
-		{ok, ClientSocket} ->
-			case catch Dispatch:init(Context) of
-				{reply, Reply, NewContext, Timeout} ->
-					Transport:send(ClientSocket, format(Reply)),
-					inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
-					{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
-				{reply_later, Reply, NewContext, Timeout} ->
-					gen_server:cast(self(), {send, Reply}),
-					inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
-					{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
-				{noreply, NewContext, Timeout} ->
-					inet:setopts(ClientSocket, SocketOptions ++ [{active, once}]),
-					{ok, State#?MODULE{socket=ClientSocket, context=NewContext, timeout=Timeout}, Timeout};
-				{stop, Reason} ->
-					{stop, Reason};
-				Exit ->
-					{stop, Exit}
+init(State=#?MODULE{host=Host, port=Port, transport=Transport, socket=undefined}) ->
+	case Transport:connect(Host, Port, State#?MODULE.socket_options) of
+		{ok, Socket} ->
+			case Socket of
+				{sslsocket, _, _} ->
+					case ssl:peercert(Socket) of
+						{ok, _} ->
+							?DEBUG("ssl cert ok"),
+							client_init(State#?MODULE{socket=Socket});
+						Error ->
+							{stop, Error}
+					end;
+				_ ->
+					client_init(State#?MODULE{socket=Socket})
 			end;
 		{error, Reason} ->
 			{stop, Reason}
 	end;
 
 %% Initialize the protocol in server mode.
-init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
-					dispatch=Dispatch, context=Context}) ->
+init(State=#?MODULE{transport=Transport, socket=Socket}) ->
 	% Leave access log.
-	{ok, {PeerAddr, PeerPort}} = peername(Socket),
+	{ok, {PeerAddr, PeerPort}} = Transport:peername(Socket),
 	fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
+	server_init(State).
+
+client_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
+						   dispatch=Dispatch, context=Context}) ->
+	case catch Dispatch:init(Context) of
+		{reply, Reply, NewContext, Timeout} ->
+			Transport:send(Socket, format(Reply)),
+			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{reply_later, Reply, NewContext, Timeout} ->
+			gen_server:cast(self(), {send, Reply}),
+			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{noreply, NewContext, Timeout} ->
+			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{stop, Reason} ->
+			{stop, Reason};
+		Exit ->
+			{stop, Exit}
+	end.
+
+server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
+						   dispatch=Dispatch, context=Context}) ->
 	case Dispatch:init(Context) of
 		{reply, Reply, NewContext, Timeout} ->
 			Data = format(Reply),
 			fubar_log:log(packet, ?MODULE, ["sending", Data]),
 			case catch Transport:send(Socket, Data) of
 				ok ->
-					setopts(Socket, SocketOptions ++ [{active, once}]),
+					Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
 					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 				{error, Reason} ->
 					fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
@@ -131,10 +148,10 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOpt
 			end;
 		{reply_later, Reply, NewContext, Timeout} ->
 			gen_server:cast(self(), {send, Reply}),
-			setopts(Socket, SocketOptions ++ [{active, once}]),
+			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{noreply, NewContext, Timeout} ->
-			setopts(Socket, SocketOptions ++ [{active, once}]),
+			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{error, Reason} ->
 			{stop, Reason}
@@ -217,15 +234,19 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			end;
 		{more, NewState} ->
 			% The socket gets active after consuming previous data.
-			setopts(Socket, [{active, once}]),
+			Transport:setopts(Socket, [{active, once}]),
 			{noreply, NewState, Timeout};
 		{error, Reason, NewState} ->
 			fubar_log:log(packet, ?MODULE, ["parse error", Reason]),
 			{stop, normal, NewState}
 	end;
+handle_info({ssl, Socket, Data}, State) ->
+	handle_info({tcp, Socket, Data}, State);
 
 %% Socket close detected.
 handle_info({tcp_closed, Socket}, State=#?MODULE{socket=Socket}) ->
+	{stop, normal, State#?MODULE{socket=undefined}};
+handle_info({ssl_closed, Socket}, State=#?MODULE{socket=Socket}) ->
 	{stop, normal, State#?MODULE{socket=undefined}};
 
 %% Invoke dispatcher to handle all the other events.
@@ -757,16 +778,6 @@ encode_number(N, Acc) ->
 		Div ->
 			encode_number(Div, <<Acc/binary, 1:1/unsigned, Rem:7/big-unsigned>>)
 	end.
-
-peername(Socket={sslsocket, _, _}) ->
-	ssl:sockname(Socket);
-peername(Socket) ->
-	inet:peername(Socket).
-
-setopts(Socket={sslsocket, _, _}, Opts) ->
-	ssl:setopts(Socket, Opts);
-setopts(Socket, Opts) ->
-	inet:setopts(Socket, Opts).
 
 %%
 %% Unit Tests

@@ -105,7 +105,7 @@ handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username}, Sta
 	end;
 handle_message(Message, State=#?MODULE{session=undefined}) ->
 	% All the other messages are not allowed without session.
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> no session", Message]),
+	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> sessionless message", Message]),
 	{stop, normal, State#?MODULE{timestamp=now()}};
 handle_message(#mqtt_pingreq{}, State) ->
 	% Reflect ping and refresh timeout.
@@ -161,12 +161,14 @@ handle_message(Message, State) ->
 		  {reply_later, mqtt_message(), state(), timeout()} |
 		  {noreply, state(), timeout()} |
 		  {stop, reason(), state()}.
-handle_event(timeout, State) ->
+handle_event(timeout, State=#?MODULE{client_id=ClientId}) ->
 	% General timeout
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.client_id, "timed out"]),
+	fubar_log:log(debug, ?MODULE, [ClientId, "timed out"]),
+	{stop, normal, State};
+handle_event(timeout, State) ->
 	{stop, normal, State};
 handle_event(Event, State=#?MODULE{session=undefined}) ->
-	fubar_log:log(warning, ?MODULE, [State#?MODULE.client_id, "no session", Event]),
+	fubar_log:log(warning, ?MODULE, [State#?MODULE.client_id, "sessionless event", Event]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
 handle_event(Event=#mqtt_publish{}, State) ->
 	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= PUBLISH", Event]),
@@ -197,9 +199,10 @@ handle_event(Event, State) ->
 
 %% @doc Finalize the server process.
 -spec terminate(state()) -> ok.
-terminate(State) ->
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.client_id, terminate]),
-	State.
+terminate(#?MODULE{client_id=ClientId}) ->
+	fubar_log:log(debug, ?MODULE, [ClientId, terminate]);
+terminate(_) ->
+	ok.
 
 %%
 %% Local Functions
