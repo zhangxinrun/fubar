@@ -112,7 +112,7 @@ init(State=#?MODULE{host=Host, port=Port, transport=Transport, socket=undefined,
 init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
 					dispatch=Dispatch, context=Context}) ->
 	% Leave access log.
-	{ok, {PeerAddr, PeerPort}} = inet:peername(Socket),
+	{ok, {PeerAddr, PeerPort}} = peername(Socket),
 	fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
 	case Dispatch:init(Context) of
 		{reply, Reply, NewContext, Timeout} ->
@@ -120,7 +120,7 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOpt
 			fubar_log:log(packet, ?MODULE, ["sending", Data]),
 			case catch Transport:send(Socket, Data) of
 				ok ->
-					inet:setopts(Socket, SocketOptions ++ [{active, once}]),
+					setopts(Socket, SocketOptions ++ [{active, once}]),
 					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 				{error, Reason} ->
 					fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
@@ -131,10 +131,10 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOpt
 			end;
 		{reply_later, Reply, NewContext, Timeout} ->
 			gen_server:cast(self(), {send, Reply}),
-			inet:setopts(Socket, SocketOptions ++ [{active, once}]),
+			setopts(Socket, SocketOptions ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{noreply, NewContext, Timeout} ->
-			inet:setopts(Socket, SocketOptions ++ [{active, once}]),
+			setopts(Socket, SocketOptions ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{error, Reason} ->
 			{stop, Reason}
@@ -217,7 +217,7 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			end;
 		{more, NewState} ->
 			% The socket gets active after consuming previous data.
-			inet:setopts(Socket, [{active, once}]),
+			setopts(Socket, [{active, once}]),
 			{noreply, NewState, Timeout};
 		{error, Reason, NewState} ->
 			fubar_log:log(packet, ?MODULE, ["parse error", Reason]),
@@ -757,6 +757,16 @@ encode_number(N, Acc) ->
 		Div ->
 			encode_number(Div, <<Acc/binary, 1:1/unsigned, Rem:7/big-unsigned>>)
 	end.
+
+peername(Socket={sslsocket, _, _}) ->
+	ssl:sockname(Socket);
+peername(Socket) ->
+	inet:peername(Socket).
+
+setopts(Socket={sslsocket, _, _}, Opts) ->
+	ssl:setopts(Socket, Opts);
+setopts(Socket, Opts) ->
+	inet:setopts(Socket, Opts).
 
 %%
 %% Unit Tests

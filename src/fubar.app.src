@@ -6,7 +6,14 @@
   {applications, [kernel, stdlib]},
   {mod, {fubar_app, []}},
   {env, [{fubar_app, [{acceptors, 4},
-                      {max_connections, infinity}
+                      {max_connections, infinity},
+                      {options, [{backlog, 4096}, {nodelay, true}, {reuseaddr, true},
+                                 % Lines below are ssl related options.
+                                 % Modify as needed.
+                                 {cacertfile, "priv/ssl/ca/cacert.pem"},
+                                 {certfile, "priv/ssl/cert.pem"},
+                                 {keyfile, "priv/ssl/key.pem"},
+                                 {verify, verify_none}]}
                      ]},
          {fubar_log, [{dir, "priv/log"},
                       {max_bytes, 10485760},

@@ -23,7 +23,8 @@
 %% Records
 %%
 -record(settings, {acceptors = 100 :: integer(),
-				   max_connections = infinity :: timeout()}).
+				   max_connections = infinity :: timeout(),
+				   options = [] :: proplist(atom(), term())}).
 
 %%
 %% Exports
@@ -73,11 +74,25 @@ start(_StartType, _StartArgs) ->
 			fubar:apply_all_module_attributes_of({bootstrap_slave, [MasterNode]})
 	end,
 	application:start(ranch),
-	{MQTTPort, _} = string:to_integer(os:getenv("MQTT_PORT")),
-	ranch:start_listener(mqtt_listener, Settings#settings.acceptors,
-						 ranch_tcp, [{port, MQTTPort},
-									 {max_connections, Settings#settings.max_connections}],
-						 mqtt_protocol, [{dispatch, mqtt_server}]).
+	case {string:to_integer(os:getenv("MQTT_PORT")), Settings#settings.max_connections} of
+		{{error, _}, _} ->
+			ok;
+		{{MQTTPort, _}, MQTTMax} ->
+			ranch:start_listener(mqtt, Settings#settings.acceptors,
+								 ranch_tcp, [{port, MQTTPort}, {max_connections, MQTTMax} |
+											 Settings#settings.options],
+								 mqtt_protocol, [{dispatch, mqtt_server}])
+	end,
+	case {string:to_integer(os:getenv("MQTTS_PORT")), Settings#settings.max_connections} of
+		{{error, _}, _} ->
+			ok;
+		{{MQTTSPort, _}, MQTTSMax} ->
+			ssl:start(),
+			ranch:start_listener(mqtts, Settings#settings.acceptors,
+								 ranch_ssl, [{port, MQTTSPort}, {max_connections, MQTTSMax} |
+											 Settings#settings.options],
+								 mqtt_protocol, [{dispatch, mqtt_server}])
+	end.
 
 stop(_State) ->
 	ok.
