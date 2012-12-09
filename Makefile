@@ -35,7 +35,7 @@ debug: compile
 
 # Launch a shell for client.
 client: compile
-	$(ERL) -pa ebin deps/*/ebin +A 100 +K true +P 1000000 +W w -s reloader
+	$(ERL) -pa ebin deps/*/ebin +A 16 +K true +P 100000 +W w -s reloader
 
 # Make a textual log snapshot.
 log:

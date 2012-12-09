@@ -35,7 +35,7 @@ start_link() ->
 -spec start_child(proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
 start_child(Props) ->
 	Id = proplists:get_value(client_id, Props),
-	Spec = {Id, {mqtt_client, start_link, [Props]}, transient, 10, worker, dynamic},
+	Spec = {Id, {mqtt_client, start_link, [Props]}, permanent, 10, worker, dynamic},
 	supervisor:start_child(?MODULE, Spec).
 
 %% @doc Start an mqtt client under supervisory.
@@ -43,7 +43,7 @@ start_child(Props) ->
 start_child_after(Millisec, Props) ->
 	timer:sleep(Millisec),
 	Id = proplists:get_value(client_id, Props),
-	Spec = {Id, {mqtt_client, start_link, [Props]}, transient, 10, worker, dynamic},
+	Spec = {Id, {mqtt_client, start_link, [Props]}, permanent, 10, worker, dynamic},
 	supervisor:start_child(?MODULE, Spec).
 
 %% @doc Stop an mqtt client under supervisory.

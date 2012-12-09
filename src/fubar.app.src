@@ -13,23 +13,24 @@
                                  {cacertfile, "priv/ssl/ca/cacert.pem"},
                                  {certfile, "priv/ssl/cert.pem"},
                                  {keyfile, "priv/ssl/key.pem"},
-                                 {verify, verify_none}]}
+                                 {reuse_session, true}, {verify, verify_none}]}
                      ]},
          {fubar_log, [{dir, "priv/log"},
                       {max_bytes, 10485760},
                       {max_files, 10},
-                      {classes, [access, packet, protocol, resource, trace, warning, debug, noise]}
+                      {classes, [trace, access, packet, protocol, resource, warning, debug, noise]}
+                      %{classes, []}
                      ]},
          {vm_memory_monitor, [{high_watermark, 0.4},
                               {low_watermark, 0.38}]},
          {mqtt_protocol, [{max_packet_size, 4096},
                           {dispatch, mqtt_server}
                          ]},
-         {mqtt_server, [{timeout, 10000},
+         {mqtt_server, [{timeout, 3000},
                         {auth, undefined}
                        ]},
          {mqtt_session, [{transaction_timeout, 60000},
-                         {buffer_limit, 10},
+                         {buffer_limit, 3},
                          {max_retries, 5},
                          {retry_after, 10000}]},
          {mqtt_topic, [{timeout, 10000}]}

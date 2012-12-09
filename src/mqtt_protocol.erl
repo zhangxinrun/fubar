@@ -83,31 +83,62 @@ stop(Pid) ->
 %%
 
 %% Initialize the protocol in client mode.
-init(State=#?MODULE{host=Host, port=Port, transport=Transport, socket=undefined}) ->
-	case Transport:connect(Host, Port, State#?MODULE.socket_options) of
+init(State=#?MODULE{host=Host, port=Port, transport=Transport,
+					socket=undefined, socket_options=Options}) ->
+	case Transport:connect(Host, Port, Options) of
 		{ok, Socket} ->
+			NewOptions = lists:foldl(fun(Key, Acc) ->
+											 proplists:delete(Key, Acc)
+									 end, Options, ssl_options()),
+			NewState = State#?MODULE{socket=Socket, socket_options=NewOptions},
 			case Socket of
 				{sslsocket, _, _} ->
+					?DEBUG(ssl:connection_info(Socket)),
 					case ssl:peercert(Socket) of
 						{ok, _} ->
 							?DEBUG("ssl cert ok"),
-							client_init(State#?MODULE{socket=Socket});
+							client_init(NewState);
 						Error ->
 							{stop, Error}
 					end;
 				_ ->
-					client_init(State#?MODULE{socket=Socket})
+					client_init(NewState)
 			end;
 		{error, Reason} ->
 			{stop, Reason}
 	end;
 
 %% Initialize the protocol in server mode.
-init(State=#?MODULE{transport=Transport, socket=Socket}) ->
+init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options}) ->
 	% Leave access log.
 	{ok, {PeerAddr, PeerPort}} = Transport:peername(Socket),
 	fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
-	server_init(State).
+	case Socket of
+		{sslsocket, _, _} ->
+			fubar_log:log(debug, ?MODULE, [ssl, ssl:connection_info(Socket)]),
+			NewOptions = lists:foldl(fun(Key, Acc) ->
+											 proplists:delete(Key, Acc)
+									 end, Options, ssl_options()),
+			NewState = State#?MODULE{socket_options=NewOptions},
+			case ssl:peercert(Socket) of
+				{ok, _} ->
+					fubar_log:log(debug, ?MODULE, "ssl cert ok"),
+					server_init(NewState);
+				Error ->
+					case proplists:get_value(verify, Options) of
+						verify_peer ->
+							% The client is not certified and rejected.
+							fubar_log:log(warning, ?MODULE, ["ssl cert not ok", Error]),
+							Transport:close(Socket),
+							{ok, NewState#?MODULE{socket=undefined, timeout=0}, 0};
+						_ ->
+							% The client is not certified but accepted.
+							server_init(NewState)
+					end
+			end;
+		_ ->
+			server_init(State)
+	end.
 
 client_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
 						   dispatch=Dispatch, context=Context}) ->
@@ -237,7 +268,7 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			Transport:setopts(Socket, [{active, once}]),
 			{noreply, NewState, Timeout};
 		{error, Reason, NewState} ->
-			fubar_log:log(packet, ?MODULE, ["parse error", Reason]),
+			fubar_log:log(warning, ?MODULE, ["parse error", Reason]),
 			{stop, normal, NewState}
 	end;
 handle_info({ssl, Socket, Data}, State) ->
@@ -778,6 +809,11 @@ encode_number(N, Acc) ->
 		Div ->
 			encode_number(Div, <<Acc/binary, 1:1/unsigned, Rem:7/big-unsigned>>)
 	end.
+
+ssl_options() ->
+	[verify, verify_fun, fail_if_no_peer_cert, depth, cert, certfile,
+	 key, keyfile, password, cacerts, cacertfile, dh, dhfile, ciphers,
+	 ssl_imp, reuse_sessions, reuse_session].
 
 %%
 %% Unit Tests

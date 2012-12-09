@@ -352,7 +352,7 @@ handle_event(Event, State) ->
 %% @doc Finalize the client process.
 -spec terminate(state()) -> ok.
 terminate(State) ->
-	?DEBUG([terminate, State]),
+	?INFO([terminate, State]),
 	State.
 
 %%
