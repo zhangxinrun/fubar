@@ -27,7 +27,7 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 
 == More Features ==
 1. Adding a new broker node to existing broker cluster
-	$ make test master_node=name@host
+	$ make test master=name@host
 	
 	Note) If you want to more than one broker node in a computer,
 	You have to use different node name and listen port as:
