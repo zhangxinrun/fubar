@@ -13,7 +13,7 @@ default_crl_days = 7
 default_days = 365
 default_md = sha1
 
-policy = derca_policy
+policy = fubar_ca_policy
 x509_extensions = certificate_extensions
 
 [ fubar_ca_policy ]

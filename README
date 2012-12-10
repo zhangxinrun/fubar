@@ -119,33 +119,29 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 		$ chmod 700 private
 		$ echo 01 > serial
 		$ touch index.txt
-		
-		Put your hostname in line 39 of openssl.cnf
-		$ vi openssl.cnf
-		~ [ root_ca_distinguished_name ]                             
-		~ commonName = hostname                                      
-		
-		Then, run openssl to generate a certificate.
 		$ openssl req -x509 -config openssl.cnf -newkey rsa:2048 -days 365 \
 			-out cacert.pem -outform PEM -subj /CN=fubar_ca/ -nodes
 		$ openssl x509 -in cacert.pem -out cacert.cer -outform DER
 	
 	9.2. Create a server certificate
-		$ cd ..
-		$ openssl genrsa -out key.pem 2048
-		$ openssl req -new -key key.pem -out req.pem -outform PEM \
-			-subj /CN=$(hostname)/O=server/ -nodes
-		$ openssl ca -config ca/openssl.cnf -in req.pem -out cert.pem -notext \
+		$ openssl genrsa -out ../key.pem 2048
+		$ openssl req -new -key ../key.pem -out ../req.pem -outform PEM \
+			-subj /CN=SomeHostName/O=YourOrganizationName/ -nodes
+		$ openssl ca -config openssl.cnf -in ../req.pem -out ../cert.pem -notext \
 			-batch -extensions server_ca_extensions
-		$ openssl pkcs12 -export -out keycert.p12 -in cert.pem -inkey key.pem \
-			-passout pass:MyPassword
-	
+		$ openssl pkcs12 -export -in ../cert.pem -out ../keycert.p12 \
+			-inkey ../key.pem -passout pass:YourPassword
+		
 	9.3. Testing
 		Use mqtts_port command line parameter to start an SSL listener when starting the broker.
+		$ cd ../../..
 		$ make test mqtts_port=1882
 		(fubar@host)1>
 		
-		Now use {transport, ranch_ssl} option on the client side.
+		Test basic connection with openssl s_client.
+		$ openssl s_client -connect localhost:1882
+		
+		If it succeeds, use {transport, ranch_ssl} option on the client side.
 		$ make client
 		1> ssl:start().
 		2> mqtt_client:start([{port, 1882},{transport, ranch_ssl},{client_id, <<"ssltest">>}]).
