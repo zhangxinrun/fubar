@@ -39,6 +39,7 @@
 				  socket :: port(),
 				  socket_options = [] :: proplist(atom(), term()),
 				  max_packet_size = 4096 :: pos_integer(),
+				  acl = undefined :: module(),
 				  header,
 				  buffer = <<>> :: binary(),
 				  dispatch :: module(),
@@ -109,10 +110,49 @@ init(State=#?MODULE{host=Host, port=Port, transport=Transport,
 	end;
 
 %% Initialize the protocol in server mode.
-init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options}) ->
+init(State=#?MODULE{transport=Transport, socket=Socket}) ->
 	% Leave access log.
 	{ok, {PeerAddr, PeerPort}} = Transport:peername(Socket),
-	fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
+	case State#?MODULE.acl of
+		undefined ->
+			fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
+			server_init(State);
+		Module ->
+			case Module:verify(PeerAddr) of
+				ok ->
+					fubar_log:log(access, ?MODULE, ["privileged connection from", PeerAddr, PeerPort]),
+					server_init(State#?MODULE{context=[{auth, undefined}]});
+				{error, not_found} ->
+					fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
+					server_init(State);
+				{error, forbidden} ->
+					fubar_log:log(warning, ?MODULE, ["forbidden connection from", PeerAddr, PeerPort]),
+					Transport:close(Socket),
+					{ok, State#?MODULE{socket=undefined, timeout=0}, 0}
+			end
+	end.
+
+client_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options,
+						   dispatch=Dispatch, context=Context}) ->
+	case catch Dispatch:init(Context) of
+		{reply, Reply, NewContext, Timeout} ->
+			Transport:send(Socket, format(Reply)),
+			Transport:setopts(Socket, Options ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{reply_later, Reply, NewContext, Timeout} ->
+			gen_server:cast(self(), {send, Reply}),
+			Transport:setopts(Socket, Options ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{noreply, NewContext, Timeout} ->
+			Transport:setopts(Socket, Options ++ [{active, once}]),
+			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
+		{stop, Reason} ->
+			{stop, Reason};
+		Exit ->
+			{stop, Exit}
+	end.
+
+server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options}) ->
 	case Socket of
 		{sslsocket, _, _} ->
 			fubar_log:log(debug, ?MODULE, [ssl, ssl:connection_info(Socket)]),
@@ -123,7 +163,7 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options})
 			case ssl:peercert(Socket) of
 				{ok, _} ->
 					fubar_log:log(debug, ?MODULE, "ssl cert ok"),
-					server_init(NewState);
+					server_init(NewState, ok);
 				Error ->
 					case proplists:get_value(verify, Options) of
 						verify_peer ->
@@ -133,42 +173,22 @@ init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options})
 							{ok, NewState#?MODULE{socket=undefined, timeout=0}, 0};
 						_ ->
 							% The client is not certified but accepted.
-							server_init(NewState)
+							server_init(NewState, ok)
 					end
 			end;
 		_ ->
-			server_init(State)
+			server_init(State, ok)
 	end.
 
-client_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
-						   dispatch=Dispatch, context=Context}) ->
-	case catch Dispatch:init(Context) of
-		{reply, Reply, NewContext, Timeout} ->
-			Transport:send(Socket, format(Reply)),
-			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
-			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
-		{reply_later, Reply, NewContext, Timeout} ->
-			gen_server:cast(self(), {send, Reply}),
-			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
-			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
-		{noreply, NewContext, Timeout} ->
-			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
-			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
-		{stop, Reason} ->
-			{stop, Reason};
-		Exit ->
-			{stop, Exit}
-	end.
-
-server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=SocketOptions,
-						   dispatch=Dispatch, context=Context}) ->
+server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options,
+						   dispatch=Dispatch, context=Context}, ok) ->
 	case Dispatch:init(Context) of
 		{reply, Reply, NewContext, Timeout} ->
 			Data = format(Reply),
 			fubar_log:log(packet, ?MODULE, ["sending", Data]),
 			case catch Transport:send(Socket, Data) of
 				ok ->
-					Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
+					Transport:setopts(Socket, Options ++ [{active, once}]),
 					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 				{error, Reason} ->
 					fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
@@ -179,10 +199,10 @@ server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=So
 			end;
 		{reply_later, Reply, NewContext, Timeout} ->
 			gen_server:cast(self(), {send, Reply}),
-			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
+			Transport:setopts(Socket, Options ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{noreply, NewContext, Timeout} ->
-			Transport:setopts(Socket, SocketOptions ++ [{active, once}]),
+			Transport:setopts(Socket, Options ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{error, Reason} ->
 			{stop, Reason}

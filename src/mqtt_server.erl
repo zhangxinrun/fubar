@@ -55,9 +55,9 @@
 		  {noreply, state(), timeout()} |
 		  {stop, reason()}.
 init(Props) ->
-	Settings = fubar:settings(?MODULE)++Props,
-	fubar_log:log(debug, ?MODULE, [undefined, init, Settings]),
-	State = ?PROPS_TO_RECORD(Settings, ?MODULE),
+	DefaultState = ?PROPS_TO_RECORD(fubar:settings(?MODULE), ?MODULE),
+	State = ?PROPS_TO_RECORD(Props, ?MODULE, DefaultState)(),
+	fubar_log:log(debug, ?MODULE, [undefined, init, State]),
 	% Don't respond anything against tcp connection and apply small initial timeout.
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
 

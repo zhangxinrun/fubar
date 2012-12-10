@@ -42,6 +42,7 @@ boot() ->
 	?INFO({"created a schema on", node()}),
 	ok = application:start(mnesia),
 	fubar_route:boot(),
+	mqtt_acl:boot(),
 	mqtt_account:boot(),
 	mqtt_topic:boot().
 
@@ -53,6 +54,7 @@ cluster(MasterNode) ->
 	{atomic, ok} = mnesia:change_table_copy_type(schema, node(), disc_copies),
 	?INFO({"clustered with", MasterNode}),
 	fubar_route:cluster(MasterNode),
+	mqtt_acl:cluster(MasterNode),
 	mqtt_account:cluster(MasterNode),
 	mqtt_topic:cluster(MasterNode).
 
@@ -63,7 +65,7 @@ start(_StartType, _StartArgs) ->
 	Props = fubar:settings(?MODULE),
 	?INFO({"loaded settings", Props}),
 	Settings = ?PROPS_TO_RECORD(Props, settings),
-	fubar_sup:start_link(),
+	{ok, Pid} = fubar_sup:start_link(),
 	application:start(crypto),
 	application:start(public_key),
 	application:start(ssl),
@@ -92,7 +94,9 @@ start(_StartType, _StartArgs) ->
 								 ranch_ssl, [{port, MQTTSPort}, {max_connections, MQTTSMax} |
 											 Settings#settings.options],
 								 mqtt_protocol, [{dispatch, mqtt_server}])
-	end.
+	end,
+	{ok, Pid}.
 
 stop(_State) ->
+	timer:apply_after(0, application, stop, [ranch]),
 	ok.

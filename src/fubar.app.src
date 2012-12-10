@@ -19,15 +19,17 @@
                       {max_bytes, 10485760},
                       {max_files, 10},
                       {classes, [trace, access, packet, protocol, resource, warning, debug, noise]}
-                      %{classes, []}
+                      % {classes, []}
                      ]},
          {vm_memory_monitor, [{high_watermark, 0.4},
                               {low_watermark, 0.38}]},
          {mqtt_protocol, [{max_packet_size, 4096},
+                          {acl, mqtt_acl},
                           {dispatch, mqtt_server}
                          ]},
          {mqtt_server, [{timeout, 3000},
                         {auth, undefined}
+                        % {auth, mqtt_account}
                        ]},
          {mqtt_session, [{transaction_timeout, 60000},
                          {buffer_limit, 3},

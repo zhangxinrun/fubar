@@ -52,7 +52,7 @@ start() ->
 %% @sample ok = fubar:stop().
 -spec stop() -> ok | {error, reason()}.
 stop() ->
-	application:stop(ranch).
+	application:stop(?MODULE).
 
 %% @doc Get settings from the application metadata.
 %% @sample Props = fubar:settings(?MODULE).
