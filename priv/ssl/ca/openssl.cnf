@@ -1,7 +1,7 @@
 [ ca ]
-default_ca = derca
+default_ca = fubar_ca
 
-[ derca ]
+[ fubar_ca ]
 dir = .
 certificate = $dir/cacert.pem
 database = $dir/index.txt
@@ -16,7 +16,7 @@ default_md = sha1
 policy = derca_policy
 x509_extensions = certificate_extensions
 
-[ derca_policy ]
+[ fubar_ca_policy ]
 commonName = supplied
 stateOrProvinceName = optional
 countryName = optional
