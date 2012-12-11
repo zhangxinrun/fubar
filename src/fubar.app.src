@@ -13,7 +13,7 @@
                                  {cacertfile, "priv/ssl/ca/cacert.pem"},
                                  {certfile, "priv/ssl/cert.pem"},
                                  {keyfile, "priv/ssl/key.pem"},
-                                 {reuse_session, true}, {verify, verify_none}]}
+                                 {reuse_sessions, false}, {verify, verify_none}]}
                      ]},
          {fubar_log, [{dir, "priv/log"},
                       {max_bytes, 10485760},
