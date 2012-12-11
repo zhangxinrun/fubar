@@ -32,6 +32,7 @@
 				  auth :: module(),
 				  clean_session = false :: boolean(),
 				  session :: pid(),
+				  valid_keep_alive :: undefined | {integer(), integer()},
 				  timeout = 10000 :: timeout(),
 				  timestamp :: timestamp()}).
 
@@ -79,7 +80,8 @@ handle_message(Message=#mqtt_connect{client_id=ClientId, username=undefined},
 			% Give another chance to connect with right credential again.
 			{reply, mqtt:connack([{code, unauthorized}]), State, timeout(Timeout, Timestamp)}
 	end;
-handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username}, State=#?MODULE{session=undefined}) ->
+handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username},
+			   State=#?MODULE{session=undefined}) ->
 	case State#?MODULE.auth of
 		undefined ->
 			fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT accepted", Username]),
@@ -226,11 +228,15 @@ bind_session(Message=#mqtt_connect{client_id=ClientId}, State) ->
 		   end,
 	case mqtt_session:bind(ClientId, Will) of
 		{ok, Session} ->
-			Timeout = case Message#mqtt_connect.keep_alive of
-						  infinity -> infinity;
-						  KeepAlive -> KeepAlive*1500
-					  end,
-			{reply, mqtt:connack([{code, accepted}]),
+			KeepAlive = determine_keep_alive(Message#mqtt_connect.keep_alive, State#?MODULE.valid_keep_alive),
+			% Set timeout as 1.5 times the keep-alive.
+			Timeout = KeepAlive*1500,
+			Reply = case KeepAlive =:= Message#mqtt_connect.keep_alive of
+						true -> mqtt:connack([{code, accepted}]);
+						% MQTT extension: server may suggest different keep-alive.
+						_ -> mqtt:connack([{code, accepted}, {extra, <<KeepAlive:16/big-unsigned>>}])
+					end,
+			{reply, Reply,
 			 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
 						   session=Session, timeout=Timeout, timestamp=now()}, Timeout};
 		Error ->
@@ -240,6 +246,13 @@ bind_session(Message=#mqtt_connect{client_id=ClientId}, State) ->
 			 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
 						   timestamp=now()}, 0}
 	end.
+
+determine_keep_alive(Suggested, {Min, _}) when Suggested < Min ->
+	Min;
+determine_keep_alive(Suggested, {_, Max}) when Suggested > Max ->
+	Max;
+determine_keep_alive(Suggested, _) ->
+	Suggested.
 
 %%
 %% Unit Tests

@@ -28,6 +28,7 @@
                           {dispatch, mqtt_server}
                          ]},
          {mqtt_server, [{timeout, 3000},
+                        {valid_keep_alive, {60, 3600}},
                         {auth, undefined}
                         % {auth, mqtt_account}
                        ]},
