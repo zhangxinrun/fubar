@@ -31,7 +31,7 @@ run: compile
 
 # Debug running program in production mode.
 debug: compile
-	ssh $(host) -p $(port) -t to_erl /tmp/$(node)/
+	ssh $(host) -p $(port) -tt /usr/local/bin/to_erl /tmp/$(node)/
 
 # Launch a shell for client.
 client: compile
