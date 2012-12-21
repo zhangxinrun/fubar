@@ -158,4 +158,60 @@ applications.
 		1> ssl:start().
 		2> mqtt_client:start([{port, 8883},{transport, ranch_ssl},
 			{client_id, <<"ssltest">>}]).
+
+10. Benchmarking
+	You can simulate many client connections with a computer.
+	First, start a client shell.
 	
+	$ make client
+	1>
+	
+	mqtt_client module provides batch functions, batch_start/2,3,
+	batch_restart/0,1 and batch_stop/0.  Prepare a list of client id.
+	
+	1> Id = [list_to_binary(io_lib:format("~4..0B", [N])) ||
+		N <- lists:seq(1, 1000)].
+	[<<"0001">>,<<"0002">>,...,<<"1000">>]
+	
+	Now you can use the list to call batch_start/2,3 as:
+	
+	2> mqtt_client:batch_start(Id, [{host, "broker addr"}, clean_session]).
+	[<0.121.0>,<0.122.0>,...]
+	
+	It may take some time to complete the batch start operation.
+	You should be able to connect more than 50k clients from a computer.
+	But of course you need to do proper kernel tuning and ulimit setting to
+	do that.
+	
+	Start another client for probing.  We'll use this client later to
+	generate load.
+	
+	3> Probe = mqtt_client:start([{host, "broker addr"},
+		{client_id, <<"probe">>}, clean_session]).
+	
+	Now, we are ready to generate load.  Let's try direct messaging.
+	
+	4> Worker = mqtt_probe:start(Probe, Id, <<"...">>, 0).
+	
+	You should find endless messages printed by the batch clients.
+	The above command spawns a Worker that publishes a message <<"...">> to one
+	of the Id list every 0 millisecond using the client Probe.  You may want to
+	monitor the broker's cpu/memory/io performance during this benchmark.  Use
+	top or sar in that case.
+	
+	You can stop the worker any time.
+	
+	5> mqtt_probe:stop(Worker).
+	
+	Let's try another type of load now.  Make all the clients subscribe to a
+	common topic.
+	
+	6> [Pid ! mqtt:subscribe([{topics,<<"t1">>}]) ||
+		{_, Pid} <- mqtt_client_sup:running()].
+	
+	Then, use the probe to publish messages to the common topic periodically.
+	
+	7> f(Worker).
+	8> Worker = mqtt_probe:start(Probe, <<"t1">>, <<"...">>, 1000).
+	
+	And so it goes.
