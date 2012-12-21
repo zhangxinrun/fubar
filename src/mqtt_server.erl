@@ -202,9 +202,10 @@ handle_event(Event, State) ->
 %% @doc Finalize the server process.
 -spec terminate(state()) -> ok.
 terminate(#?MODULE{client_id=ClientId}) ->
-	fubar_log:log(debug, ?MODULE, [ClientId, terminate]);
+	fubar_log:log(debug, ?MODULE, [ClientId, terminate]),
+	normal;
 terminate(_) ->
-	ok.
+	normal.
 
 %%
 %% Local Functions

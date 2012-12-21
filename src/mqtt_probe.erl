@@ -10,18 +10,18 @@
 %%
 %% Exported Functions
 %%
--export([start/3, stop/1, loop/3]).
+-export([start/4, stop/1, loop/4]).
 
 %%
 %% API Functions
 %%
-start(Client, Topics, Interval) ->
-	proc_lib:spawn(?MODULE, loop, [Client, Topics, Interval]).
+start(Client, Topics, Payload, Interval) ->
+	proc_lib:spawn(?MODULE, loop, [Client, Topics, Payload, Interval]).
 
 stop(Probe) ->
 	Probe ! stop.
 
-loop(Client, Topics, Interval) ->
+loop(Client, Topics, Payload, Interval) ->
 	receive
 		_ ->
 			ok
@@ -33,9 +33,10 @@ loop(Client, Topics, Interval) ->
 						_ ->
 							Topics
 					end,
-			Date = httpd_util:rfc1123_date(),
-			Client ! mqtt:publish([{topic, Topic}, {payload, list_to_binary(Date)}]),
-			?MODULE:loop(Client, Topics, Interval)
+			% Date = httpd_util:rfc1123_date(),
+			% Client ! mqtt:publish([{topic, Topic}, {payload, list_to_binary(Date)}]),
+			Client ! mqtt:publish([{topic, Topic}, {payload, Payload}]),
+			?MODULE:loop(Client, Topics, Payload, Interval)
 	end.
 
 %%

@@ -38,6 +38,7 @@
 				  transport = ranch_tcp :: module(),
 				  socket :: port(),
 				  socket_options = [] :: proplist(atom(), term()),
+				  acl_socket_options = [] :: proplist(atom(), term()),
 				  max_packet_size = 4096 :: pos_integer(),
 				  acl = undefined :: module(),
 				  header,
@@ -49,7 +50,7 @@
 %%
 %% Exports
 %%
--export([start/1, start_link/4, stop/1]).
+-export([start/1, start_link/4, stop/1, setopts/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% @doc Start an MQTT client process.
@@ -79,6 +80,11 @@ start_link(Listener, Socket, Transport, Options) ->
 stop(Pid) ->
 	gen_server:cast(Pid, stop).
 
+%% @doc Set socket options.
+-spec setopts(pid(), proplist(atom(), term())) -> ok.
+setopts(Pid, Options) ->
+	gen_server:cast(Pid, {setopts, Options}).
+
 %%
 %% Callback functions
 %%
@@ -86,7 +92,7 @@ stop(Pid) ->
 %% Initialize the protocol in client mode.
 init(State=#?MODULE{host=Host, port=Port, transport=Transport,
 					socket=undefined, socket_options=Options}) ->
-	case Transport:connect(Host, Port, Options) of
+	case catch Transport:connect(Host, Port, Options) of
 		{ok, Socket} ->
 			NewOptions = lists:foldl(fun(Key, Acc) ->
 											 proplists:delete(Key, Acc)
@@ -105,8 +111,8 @@ init(State=#?MODULE{host=Host, port=Port, transport=Transport,
 				_ ->
 					client_init(NewState)
 			end;
-		{error, Reason} ->
-			{stop, Reason}
+		Error1 ->
+			{stop, Error1}
 	end;
 
 %% Initialize the protocol in server mode.
@@ -121,7 +127,8 @@ init(State=#?MODULE{transport=Transport, socket=Socket}) ->
 			case Module:verify(PeerAddr) of
 				ok ->
 					fubar_log:log(access, ?MODULE, ["privileged connection from", PeerAddr, PeerPort]),
-					server_init(State#?MODULE{context=[{auth, undefined}]});
+					server_init(State#?MODULE{socket_options=State#?MODULE.acl_socket_options,
+											  context=[{auth, undefined}]});
 				{error, not_found} ->
 					fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
 					server_init(State);
@@ -134,7 +141,7 @@ init(State=#?MODULE{transport=Transport, socket=Socket}) ->
 
 client_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options,
 						   dispatch=Dispatch, context=Context}) ->
-	case catch Dispatch:init(Context) of
+	case Dispatch:init(Context) of
 		{reply, Reply, NewContext, Timeout} ->
 			Transport:send(Socket, format(Reply)),
 			Transport:setopts(Socket, Options ++ [{active, once}]),
@@ -147,9 +154,7 @@ client_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Op
 			Transport:setopts(Socket, Options ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{stop, Reason} ->
-			{stop, Reason};
-		Exit ->
-			{stop, Exit}
+			{stop, Reason}
 	end.
 
 server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options}) ->
@@ -205,7 +210,8 @@ server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Op
 			Transport:setopts(Socket, Options ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 		{error, Reason} ->
-			{stop, Reason}
+			fubar_log:log(warning, ?MODULE, ["dispatch init failure", Reason]),
+			{stop, normal}
 	end.
 
 %% Fallback
@@ -214,8 +220,8 @@ handle_call(Request, From, State=#?MODULE{timeout=Timeout}) ->
 	{reply, {error, unknown}, State, Timeout}.
 
 %% Async administrative commands.
-handle_cast({send, Message}, State=#?MODULE{transport=Transport,
-											socket=Socket,
+handle_cast({send, Message}, State=#?MODULE{transport=Transport, socket=Socket,
+											dispatch=Dispatch, context=Context,
 											timeout=Timeout}) ->
 	Data = format(Message),
 	fubar_log:log(packet, ?MODULE, ["sending", Data]),
@@ -224,10 +230,10 @@ handle_cast({send, Message}, State=#?MODULE{transport=Transport,
 			{noreply, State, Timeout};
 		{error, Reason} ->
 			fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
-			{stop, normal, State#?MODULE{socket=undefined}};
+			{stop, Dispatch:terminate(Context), State#?MODULE{socket=undefined}};
 		Exit ->
 			fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
-			{stop, normal, State#?MODULE{socket=undefined}}
+			{stop, Dispatch:terminate(Context), State#?MODULE{socket=undefined}}
 	end;
 handle_cast(stop, State) ->
 	{stop, normal, State};
@@ -241,11 +247,15 @@ handle_cast(Message, State=#?MODULE{timeout=Timeout}) ->
 handle_info({shoot, Listener}, State=#?MODULE{listener=Listener, timeout=Timeout}) ->
 	{noreply, State, Timeout};
 
+%% Apply socket options.
+handle_info({setopts, Options}, State=#?MODULE{transport=Transport, socket=Socket, timeout=Timeout}) ->
+	fubar_log:log(debug, ?MODULE, ["setopts", Options]),
+	Transport:setopts(Socket, Options ++ [{active, once}]),
+	{noreply, State, Timeout};
+
 %% Received tcp data, start parsing.
-handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Socket,
-												buffer=Buffer, dispatch=Dispatch,
-												context=Context,
-												timeout=Timeout}) ->
+handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Socket, buffer=Buffer,
+												dispatch=Dispatch, context=Context, timeout=Timeout}) ->
 	case Data of
 		<<>> ->
 			ok;
@@ -268,10 +278,10 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 							{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 						{error, Reason} ->
 							fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
-							{stop, normal, State#?MODULE{socket=undefined}};
+							{stop, Dispatch:terminate(NewContext), State#?MODULE{socket=undefined}};
 						Exit ->
 							fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
-							{stop, normal, State#?MODULE{socket=undefined}}
+							{stop, Dispatch:terminate(NewContext), State#?MODULE{socket=undefined}}
 					end;
 				{reply_later, Reply, NewContext, NewTimeout} ->
 					gen_server:cast(self(), {send, Reply}),
@@ -281,7 +291,8 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 					self() ! {tcp, Socket, <<>>},
 					{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 				{stop, Reason, NewContext} ->
-					{stop, Reason, NewState#?MODULE{context=NewContext}}
+					fubar_log:log(debug, ?MODULE, ["dispatch issued stop", Reason]),
+					{stop, Dispatch:terminate(NewContext), NewState#?MODULE{context=NewContext}}
 			end;
 		{more, NewState} ->
 			% The socket gets active after consuming previous data.
@@ -289,16 +300,16 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			{noreply, NewState, Timeout};
 		{error, Reason, NewState} ->
 			fubar_log:log(warning, ?MODULE, ["parse error", Reason]),
-			{stop, normal, NewState}
+			{stop, Dispatch:terminate(Context), NewState}
 	end;
 handle_info({ssl, Socket, Data}, State) ->
 	handle_info({tcp, Socket, Data}, State);
 
 %% Socket close detected.
-handle_info({tcp_closed, Socket}, State=#?MODULE{socket=Socket}) ->
-	{stop, normal, State#?MODULE{socket=undefined}};
-handle_info({ssl_closed, Socket}, State=#?MODULE{socket=Socket}) ->
-	{stop, normal, State#?MODULE{socket=undefined}};
+handle_info({tcp_closed, Socket}, State=#?MODULE{socket=Socket, dispatch=Dispatch, context=Context}) ->
+	{stop, Dispatch:terminate(Context), State#?MODULE{socket=undefined}};
+handle_info({ssl_closed, Socket}, State=#?MODULE{socket=Socket, dispatch=Dispatch, context=Context}) ->
+	{stop, Dispatch:terminate(Context), State#?MODULE{socket=undefined}};
 
 %% Invoke dispatcher to handle all the other events.
 handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
@@ -315,7 +326,7 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 					{stop, normal, State#?MODULE{socket=undefined}};
 				Exit ->
 					fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
-					{stop, normal, State#?MODULE{socket=undefined}}
+					{stop, Dispatch:terminate(NewContext), State#?MODULE{socket=undefined}}
 			end;
 		{reply_later, Reply, NewContext, NewTimeout} ->
 			gen_server:cast(self(), {send, Reply}),
@@ -323,20 +334,19 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 		{noreply, NewContext, NewTimeout} ->
 			{noreply, State#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 		{stop, Reason, NewContext} ->
-			{stop, Reason, State#?MODULE{context=NewContext}}
+			fubar_log:log(debug, ?MODULE, ["dispatch issued stop", Reason]),
+			{stop, Dispatch:terminate(NewContext), State#?MODULE{context=NewContext}}
 	end.
 
 %% Termination logic.
-terminate(Reason, #?MODULE{transport=Transport, socket=Socket,
-						  dispatch=Dispatch, context=Context}) ->
+terminate(Reason, #?MODULE{transport=Transport, socket=Socket}) ->
 	case Socket of
 		undefined ->
 			fubar_log:log(access, ?MODULE, ["socket closed", Reason]);
 		_ ->
 			fubar_log:log(access, ?MODULE, ["closing socket", Reason]),
 			Transport:close(Socket)
-	end,
-	Dispatch:terminate(Context).
+	end.
 
 code_change(OldVsn, State, Extra) ->
 	?WARNING([code_change, OldVsn, State, Extra]),
@@ -781,7 +791,7 @@ format(#mqtt_suback{message_id=MessageId, qoss=QoSs}) ->
 	Payload = <<MessageIdField/binary, QoSsField/binary>>,
 	PayloadLengthField = encode_number(size(Payload)),
 	<<9:4/big-unsigned, 0:4, PayloadLengthField/binary, Payload/binary>>;
-format(#mqtt_unsubscribe{message_id=MessageId, topics=Topics, dup=Dup, qos=QoS, extra=Extra}) ->
+format(#mqtt_unsubscribe{message_id=MessageId, topics=Topics, dup=Dup, qos=QoS, extra=Extra}) when is_list(Topics) ->
 	MessageIdField = case QoS of
 						 at_most_once -> <<>>;
 						 _ -> format(MessageId)
@@ -796,6 +806,8 @@ format(#mqtt_unsubscribe{message_id=MessageId, topics=Topics, dup=Dup, qos=QoS, 
 	PayloadLengthField = encode_number(size(Payload)),
 	<<10:4/big-unsigned, DupFlag/bitstring, QoSFlag/bitstring, 0:1,
 	  PayloadLengthField/binary, Payload/binary>>;
+format(Message=#mqtt_unsubscribe{topics=Topic}) ->
+	format(Message#mqtt_unsubscribe{topics=[Topic]});
 format(#mqtt_unsuback{message_id=MessageId, extra=Extra}) ->
 	MessageIdField = format(MessageId),
 	Payload = <<MessageIdField/binary, Extra/binary>>,

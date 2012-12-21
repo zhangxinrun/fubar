@@ -9,6 +9,15 @@
 -author("Sungjin Park <jinni.park@gmail.com>").
 
 %%
+%% Exported Functions
+%%
+-export([start/0, stop/0,						% application start/stop
+		 settings/1, settings/2,				% application environment getter/setter
+		 create/1, set/2, get/2, timestamp/2,	% fubar message manipulation
+		 apply_all_module_attributes_of/1		% bootstrapping utility
+		]).
+
+%%
 %% Include files
 %%
 -ifdef(TEST).
@@ -21,15 +30,6 @@
 -record(settings, {dir = "priv/log" :: string(),
 				   max_bytes = 10485760 :: integer(),
 				   max_files = 10 :: integer()}).
-
-%%
-%% Exported Functions
-%%
--export([start/0, stop/0,						% application start/stop
-		 settings/1, settings/2,				% application environment getter/setter
-		 create/1, set/2, get/2, timestamp/2,	% fubar message manipulation
-		 apply_all_module_attributes_of/1		% bootstrapping utility
-		]).
 
 %%
 %% API Functions
@@ -52,6 +52,7 @@ start() ->
 %% @sample ok = fubar:stop().
 -spec stop() -> ok | {error, reason()}.
 stop() ->
+	fubar_app:leave(),
 	application:stop(?MODULE).
 
 %% @doc Get settings from the application metadata.

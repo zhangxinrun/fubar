@@ -5,7 +5,7 @@
   {registered, []},
   {applications, [kernel, stdlib]},
   {mod, {fubar_app, []}},
-  {env, [{fubar_app, [{acceptors, 4},
+  {env, [{fubar_app, [{acceptors, 100},
                       {max_connections, infinity},
                       {options, [{backlog, 4096}, {nodelay, true}, {reuseaddr, true},
                                  % Lines below are ssl related options.
@@ -18,12 +18,15 @@
          {fubar_log, [{dir, "priv/log"},
                       {max_bytes, 10485760},
                       {max_files, 10},
-                      {classes, [trace, access, packet, protocol, resource, warning, debug, noise]}
-                      % {classes, []}
+                      % {classes, [{trace, show}, {access, show}, {packet, hide}, {protocol, show},
+                      %            {resource, show}, {warning, show}, {debug, hide}, {noise, hide}]}
+                      {classes, [{trace, show}, {access, hide}, {resource, hide}, {warning, show}]}
                      ]},
          {vm_memory_monitor, [{high_watermark, 0.4},
                               {low_watermark, 0.38}]},
          {mqtt_protocol, [{max_packet_size, 4096},
+                          {socket_options, [{recbuf, 4096}, {sndbuf, 4096}]},
+                          {acl_socket_options, [{recbuf, 262144}, {sndbuf, 262144}]},
                           {acl, mqtt_acl},
                           {dispatch, mqtt_server}
                          ]},

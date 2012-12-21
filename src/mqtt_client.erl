@@ -9,6 +9,14 @@
 -author("Sungjin Park <jinni.park@gmail.com>").
 
 %%
+%% Exports
+%%
+-export([start/1, start_link/1, stop/1, state/1,
+		 batch_start/2, batch_start/3, batch_restart/0, batch_restart/1, batch_stop/0]).
+
+-export([init/1, handle_message/2, handle_event/2, terminate/1]).
+
+%%
 %% Includes
 %%
 -ifdef(TEST).
@@ -40,18 +48,11 @@
 				  max_waits = 10 :: integer()}).
 
 -type state() :: #?MODULE{}.
-					  -type event() :: any().
-
-%%
-%% Exports
-%%
--export([start/1, stop/1, batch_start/2, batch_start_after/3, batch_stop/1, batch_restart/1,
-		 start_link/1, state/1]).
--export([init/1, handle_message/2, handle_event/2, terminate/1]).
+-type event() :: any().
 
 %% @doc Start an MQTT client with parameters.
 %%      Parameters(defaults):
-%%        host(localhost), port(1443), username(undefined), password(undefined),
+%%        host(localhost), port(1883), username(undefined), password(undefined),
 %%        client_id(<<>>), keep_alive(600), will_topic(undefined),
 %%        will_message(undefined), will_qos(at_most_once), will_retain(false),
 %%        clean_session(false)
@@ -60,31 +61,6 @@ start(Props) ->
 	{ok, Client} = mqtt_protocol:start([{dispatch, ?MODULE} | proplists:delete(client_id, Props)]),
 	Client ! mqtt:connect(Props),
 	Client.
-
-%% @doc Stop an MQTT client process.
--spec stop(pid()) -> ok.
-stop(Client) ->
-	Client ! #mqtt_disconnect{},
-	mqtt_protocol:stop(Client).
-
--spec batch_start([binary()], proplist(atom(), term())) -> [{ok, pid()} | {error, reason()}].
-batch_start(ClientIds, Props) ->
-	mqtt_client_sup:start_link(),
-	[mqtt_client_sup:start_child([{client_id, ClientId} | Props]) || ClientId <- ClientIds].
-
--spec batch_start_after([binary()], timeout(), proplist(atom(), term())) -> [{ok, pid()} | {error, reason()}].
-batch_start_after(ClientIds, Millisec, Props) ->
-	mqtt_client_sup:start_link(),
-	[mqtt_client_sup:start_child_after(Millisec, [{client_id, ClientId} | Props]) || ClientId <- ClientIds].
-
--spec batch_stop([binary()]) -> [ok].
-batch_stop(ClientIds) ->
-	[stop(Client) || {ClientId, Client, _, _} <- supervisor:which_children(mqtt_client_sup),
-					 lists:member(ClientId, ClientIds)].
-
--spec batch_restart([binary()]) -> [{ok, pid()} | {error, reason()}].
-batch_restart(ClientIds) ->
-	[supervisor:restart_child(mqtt_client_sup, ClientId) || ClientId <- ClientIds].
 
 %% @doc Start and link an MQTT client.
 -spec start_link(proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
@@ -98,16 +74,56 @@ start_link(Props) ->
 			Error
 	end.
 
+%% @doc Stop an MQTT client process.
+-spec stop(pid()) -> ok.
+stop(Client) when is_pid(Client) ->
+	Client ! #mqtt_disconnect{},
+	mqtt_protocol:stop(Client);
+stop(Ids) when is_list(Ids) ->
+	lists:foreach(fun ?MODULE:stop/1, Ids);
+stop(Id) ->
+	[Client ! mqtt:disconnect([]) ||
+	   {Cid, Client, _, _} <- supervisor:which_children(mqtt_client_sup),
+	   Cid =:= Id].
+
 %% @doc Get internal state of an MQTT client process.
 -spec state(pid()) -> {ok, #?MODULE{}} | {error, reason()}.
 state(Client) ->
 	Client ! {state, self()},
 	receive
-		Any ->
-			{ok, Any}
-		after 5000 ->
-			{error, timeout}
+		Any -> {ok, Any}
+		after 5000 -> {error, timeout}
 	end.
+
+%% @doc Start many clients under a supervisor.
+-spec batch_start([binary()], proplist(atom(), term())) -> [pid() | {error, reason()}].
+batch_start(ClientIds, Props) ->
+	mqtt_client_sup:start_link(),
+	[mqtt_client_sup:start_child(?MODULE, [{client_id, ClientId} | Props]) ||
+		ClientId <- ClientIds].
+
+-spec batch_start([binary()], proplist(atom(), term()), timeout()) -> [pid() | {error, reason()}].
+batch_start(ClientIds, Props, Millisec) ->
+	mqtt_client_sup:start_link(),
+	[mqtt_client_sup:start_child(?MODULE, [{client_id, ClientId} | Props], Millisec) ||
+		ClientId <- ClientIds].
+
+%% @doc Restart clients under the supervisor.
+-spec batch_restart() -> [pid() | {error, reason()}].
+batch_restart() ->
+	[mqtt_client_sup:restart_child(ClientId) ||
+	   ClientId <- mqtt_client_sup:stopped()].
+
+-spec batch_restart(timeout()) -> [pid() | {error, reason()}].
+batch_restart(Millisec) ->
+	[mqtt_client_sup:restart_child(ClientId, Millisec) ||
+	   ClientId <- mqtt_client_sup:stopped()].
+
+%% @doc Stop all the clients under the supervisor.
+-spec batch_stop() -> [ok].
+batch_stop() ->
+	[Pid ! mqtt:disconnect([]) ||
+	   {_, Pid} <- mqtt_client_sup:running()].
 
 %%
 %% Callback Functions
@@ -158,7 +174,7 @@ handle_message(Message, State=#?MODULE{client_id=ClientId, state=connecting}) ->
 handle_message(Message, State=#?MODULE{client_id=ClientId, state=disconnecting}) ->
 	% Drop messages after DISCONNECT.
 	?WARNING([ClientId, "<=", Message, "dropping"]),
-	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
+	{noreply, State#?MODULE{timestamp=now(), timeout=0}, 0};
 handle_message(#mqtt_pingresp{}, State) ->
 	% Cancel expiration schedule if there is one.
 	timer:cancel(State#?MODULE.timer),
@@ -166,6 +182,18 @@ handle_message(#mqtt_pingresp{}, State) ->
 handle_message(Message=#mqtt_suback{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
 	timer:cancel(State#?MODULE.timer),
 	% Subscribe complete.  Stop retrying.
+	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
+		{value, {MessageId, Request, _, Timer}, Rest} ->
+			?DEBUG([ClientId, "<=", Message, "for", Request]),
+			timer:cancel(Timer),
+			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
+		_ ->
+			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
+			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
+	end;
+handle_message(Message=#mqtt_unsuback{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
+	timer:cancel(State#?MODULE.timer),
+	% Unsubscribe complete.  Stop retrying.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
 			?DEBUG([ClientId, "<=", Message, "for", Request]),
@@ -268,6 +296,17 @@ handle_message(Message, State) ->
 handle_event({state, From}, State) ->
 	From ! State,
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
+handle_event(timeout, State=#?MODULE{client_id=undefined}) ->
+	?ERROR([unidentified, timeout, "this is impossible"]),
+	{stop, normal, State};
+handle_event(timeout, State=#?MODULE{client_id=ClientId, state=connecting}) ->
+	?WARNING([ClientId, "CONNECT timed out"]),
+	{stop, no_connack, State};
+handle_event(timeout, State=#?MODULE{state=disconnecting}) ->
+	{stop, normal, State};
+handle_event(timeout, State) ->
+	{ok, Timer} = timer:send_after(State#?MODULE.retry_after, no_pingresp),
+	{reply, #mqtt_pingreq{}, State#?MODULE{timestamp=now(), timer=Timer}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_connect{}, State=#?MODULE{client_id=undefined}) ->
 	?DEBUG([Event#mqtt_connect.client_id, "=>", Event]),
 	{reply, Event, State#?MODULE{client_id=Event#mqtt_connect.client_id,
@@ -283,18 +322,9 @@ handle_event(Event=#mqtt_connect{}, State=#?MODULE{client_id=undefined}) ->
 										 end,
 								 timestamp=now(),
 								 state=connecting}, State#?MODULE.timeout};
-handle_event(timeout, State=#?MODULE{client_id=undefined}) ->
-	?ERROR([unidentified, timeout, "this is impossible"]),
-	{stop, normal, State};
-handle_event(timeout, State=#?MODULE{client_id=ClientId, state=connecting}) ->
-	?WARNING([ClientId, "CONNECT timed out"]),
-	{stop, no_connack, State};
 handle_event(Event, State=#?MODULE{client_id=ClientId, state=connecting}) ->
 	?WARNING([ClientId, Event, "not connected yet, dropping"]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
-handle_event(timeout, State) ->
-	{ok, Timer} = timer:send_after(State#?MODULE.retry_after, no_pingresp),
-	{reply, #mqtt_pingreq{}, State#?MODULE{timestamp=now(), timer=Timer}, State#?MODULE.timeout};
 handle_event(no_pingresp, State=#?MODULE{client_id=ClientId}) ->
 	?WARNING([ClientId, "PINGREQ timed out"]),
 	{stop, no_pingresp, State};
@@ -308,6 +338,21 @@ handle_event(Event=#mqtt_subscribe{}, State) ->
 			MessageId = State#?MODULE.message_id rem 16#ffff + 1,
 			Message = Event#mqtt_subscribe{message_id=MessageId, qos=at_least_once},
 			Dup = Message#mqtt_subscribe{dup=true},
+			{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
+			Pool = [{MessageId, Dup, 1, Timer} | State#?MODULE.retry_pool],
+			{reply, Message,
+			 State#?MODULE{timestamp=now(), message_id=MessageId, retry_pool=Pool}, State#?MODULE.timeout}
+	end;
+handle_event(Event=#mqtt_unsubscribe{}, State) ->
+	case Event#mqtt_unsubscribe.qos of
+		at_most_once ->
+			% This is out of spec. but trying.  Why not?
+			timer:cancel(State#?MODULE.timer),
+			{reply, Event, State#?MODULE{timestamp=now()}, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
+		_ ->
+			MessageId = State#?MODULE.message_id rem 16#ffff + 1,
+			Message = Event#mqtt_unsubscribe{message_id=MessageId, qos=at_least_once},
+			Dup = Message#mqtt_unsubscribe{dup=true},
 			{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
 			Pool = [{MessageId, Dup, 1, Timer} | State#?MODULE.retry_pool],
 			{reply, Message,
@@ -350,9 +395,10 @@ handle_event(Event, State) ->
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}.
 
 %% @doc Finalize the client process.
--spec terminate(state()) -> ok.
+-spec terminate(state()) -> normal | term().
+terminate(#?MODULE{state=disconnecting}) ->
+	normal;
 terminate(State) ->
-	?INFO([terminate, State]),
 	State.
 
 %%

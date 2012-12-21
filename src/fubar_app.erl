@@ -10,7 +10,7 @@
 -behaviour(application).
 
 -bootstrap_master(boot).
--bootstrap_slave(cluster).
+-bootstrap_slave(join).
 
 %%
 %% Includes
@@ -29,7 +29,7 @@
 %%
 %% Exports
 %%
--export([boot/0, cluster/1, start/2, stop/1]).
+-export([boot/0, join/1, leave/0, start/2, stop/1]).
 
 %% @doc Master mode bootstrap logic.
 boot() ->
@@ -47,16 +47,30 @@ boot() ->
 	mqtt_topic:boot().
 
 %% @doc Slave mode bootstrap logic.
-cluster(MasterNode) ->
+join(MasterNode) ->
 	ok = application:start(mnesia),
 	pong = net_adm:ping(MasterNode),
 	{ok, _} = rpc:call(MasterNode, mnesia, change_config, [extra_db_nodes, [node()]]),
-	{atomic, ok} = mnesia:change_table_copy_type(schema, node(), disc_copies),
+	case mnesia:change_table_copy_type(schema, node(), disc_copies) of
+		{atomic, ok} -> ok;
+		{aborted, {already_exists, schema, _, _}} -> ok
+	end,
 	?INFO({"clustered with", MasterNode}),
 	fubar_route:cluster(MasterNode),
 	mqtt_acl:cluster(MasterNode),
 	mqtt_account:cluster(MasterNode),
 	mqtt_topic:cluster(MasterNode).
+
+%% @doc Leave cluster.
+leave() ->
+	case nodes() of
+		[] ->
+			application:stop(mnesia);
+		[Node | _] ->
+			[mnesia:del_table_copy(Table, node()) || Table <- mnesia:system_info(tables)],
+			application:stop(mnesia),
+			rpc:call(Node, mnesia, del_table_copy, [schema, node()])
+	end.
 
 %%
 %% Application callbacks
@@ -98,5 +112,4 @@ start(_StartType, _StartArgs) ->
 	{ok, Pid}.
 
 stop(_State) ->
-	timer:apply_after(0, application, stop, [ranch]),
-	ok.
+	timer:apply_after(0, application, stop, [ranch]).

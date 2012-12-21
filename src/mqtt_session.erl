@@ -21,6 +21,7 @@
 -export([start/1,	% start a session without binding
 		 bind/2,	% find or start a session and bind with calling process
 		 clean/1,	% set clean session flag, the session will terminate on unbind
+		 setopts/2,	% set socket options to override default
 		 state/1,	% get session state
 		 trace/2]).	% set trace true/false, fubars created by this session are traced
 
@@ -40,6 +41,7 @@
 %% Records and types
 %%
 -record(?MODULE, {name :: binary(),	% usually client_id
+				  socket_options :: undefined | proplist(atom(), term()),	% socket options to override.
 				  will :: {binary(), binary(), mqtt_qos(), boolean()},	% {topic, payload, qos, retain}
 				  subscriptions = [] :: [{binary(), mqtt_qos()}],	% [{topic, qos}]
 				  client :: pid(),	% mqtt_server process
@@ -99,6 +101,20 @@ clean(Name) ->
 			Error
 	end.
 
+%% @doc Set socket options to override defaults.
+-spec setopts(pid() | binary(), proplist(atom(), term())) -> ok.
+setopts(Session, Options) when is_pid(Session) ->
+	gen_server:call(Session, {setopts, Options});
+setopts(Name, Options) ->
+	case fubar_route:resolve(Name) of
+		{ok, {undefined, ?MODULE}} ->
+			{error, inactive};
+		{ok, {Session, ?MODULE}} ->
+			setopts(Session, Options);
+		Error ->
+			Error
+	end.
+	
 %% @doc Get session state.
 -spec state(pid() | binary()) -> #?MODULE{}.
 state(Session) when is_pid(Session) ->
@@ -144,6 +160,10 @@ handle_call(state, _, State) ->
 handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=Buffer}) ->
 	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "linking", Client]),
 	link(Client),	% to detect client down and to let client crash when this session down
+	case State#?MODULE.socket_options of
+		undefined -> ok;
+		Options -> Client ! {setopts, Options}
+	end,
 	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
@@ -154,10 +174,16 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=B
 	link(Client),
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
-handle_call({trace, Value}, _, State) ->
-	reply(ok, State#?MODULE{trace=Value});
 handle_call(clean, _, State) ->
 	reply(ok, State#?MODULE{clean=true});
+handle_call({setopts, Options}, _, State) ->
+	case State#?MODULE.client of
+		undefined -> ok;
+		Client -> Client ! {setopts, Options}
+	end,
+	reply(ok, State#?MODULE{socket_options=Options});
+handle_call({trace, Value}, _, State) ->
+	reply(ok, State#?MODULE{trace=Value});
 
 %% Fallback
 handle_call(Request, From, State) ->
@@ -468,26 +494,24 @@ do_transaction(ClientId, Message=#mqtt_publish{topic=Name}, Trace) ->
 			exit(Error)
 	end.
 
-do_transaction(ClientId, #mqtt_subscribe{topics=Topics}, Timeout, Trace) ->
+do_transaction(ClientId, #mqtt_subscribe{topics=Topics}, _Timeout, Trace) ->
 	F = fun({Topic, QoS}) ->
 				Props = [{origin, ClientId}, {from, ClientId}, {to, Topic},
-						 {via, ClientId}, {payload, {subscribe, QoS, ?MODULE}}],
+						 {via, ClientId}, {payload, {subscribe, QoS, ?MODULE, self()}}],
 				Fubar = case Trace of
 							true -> fubar:create([{id, uuid:uuid4()} | Props]);
 							_ -> fubar:create(Props)
 						end,
 				case fubar_route:ensure(Topic, mqtt_topic) of
 					{ok, Pid} ->
-						case catch gen_server:call(Pid, Fubar, Timeout) of
-							{ok, NewQoS} -> NewQoS;
-							_ -> undefined
-						end;
+						catch gen_server:cast(Pid, Fubar),
+						QoS;
 					_ ->
 						undefined
 				end
 		end,
 	lists:map(F, Topics);
-do_transaction(ClientId, #mqtt_unsubscribe{topics=Topics}, Timeout, Trace) ->
+do_transaction(ClientId, #mqtt_unsubscribe{topics=Topics}, _Timeout, Trace) ->
 	F = fun(Topic) ->
 				Props = [{origin, ClientId}, {from, ClientId}, {to, Topic},
 						 {via, ClientId}, {payload, unsubscribe}],
@@ -497,7 +521,7 @@ do_transaction(ClientId, #mqtt_unsubscribe{topics=Topics}, Timeout, Trace) ->
 						end,
 				case fubar_route:resolve(Topic) of
 					{ok, {Pid, mqtt_topic}} ->
-						catch gen_server:call(Pid, Fubar, Timeout);
+						catch gen_server:cast(Pid, Fubar);
 					_ ->
 						{error, not_found}
 				end

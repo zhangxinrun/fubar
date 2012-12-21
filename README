@@ -1,5 +1,6 @@
-== fubar ==
-An MQTT message broker written in erlang targeted to support internet scale applications.
+== Fubar ==
+An MQTT message broker written in erlang targeted to support internet scale
+applications.
 
 == Getting Started ==
 1. Getting dependencies and building
@@ -13,7 +14,7 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	3.1. Starting a node for client
 		$ make client
 	
-	3.2. Connecting clients (in the erlang shell)
+	3.2. Connecting clients (in the client shell)
 		1> C1 = mqtt_client:start([{client_id, <<"c1">>}]).
 		2> C2 = mqtt_client:start([{client_id, <<"c2">>}]).
 	
@@ -50,7 +51,10 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	                           {will_topic, <<"will">>},
 	                           {will_message, <<"bye-bye">>},
 	                           {will_qos, at_least_once},
-	                           will_retain]).
+	                           will_retain,
+	                           socket_options, [...]]).
+	
+	Refer inet:setopts/2 for socket_options.
 	
 4. Starting a broker in daemon mode
 	Use 'run' instead of 'test'.
@@ -61,27 +65,27 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 5. Getting a daemon shell
 	$ make debug
 	
-	If you are debuggin from remote machine (port defaults to ssh 22):
-	$ make debug host=xxx.xxx.xxx.xxx port=xx
-	
 	Note) The debug shell is closely bound with the daemon.  If you exit from
-	the debug shell in a normal way, the daemon will stop.  Close or kill the
-	debug shell process (ssh) to prevent the daemon from being terminated.
+	the debug shell in a normal way, the daemon will stop.  Use CTRL-D to stop
+	debugging.
 	
 6. Broker state is preserved
-	The broker restores all the state -- accounts, topics and subscriptions - on restart.
-	To clear this state, do:
+	The broker restores all the state -- accounts, topics and subscriptions -
+	on restart.  To clear this state, do:
 	$ make reset
 		
 7. Dumping logs to text files
 	SASL logs can be taken as:
 	$ make log
 	
-	SASL logs show events happened in the start-up process and events not dealt with
-	by the application.
+	SASL logs show events happened in the start-up process and events not dealt
+	with by the application.
 	
 	Application logs can be taken from the shell as:
 	(fubar@host)1> fubar_log:dump(trace, "trace.log").
+	
+	Or you can dump all the logs by:
+	(fubar@host)1> fubar_log:dump().
 	
 	Log classes are:
 	- packet	% bytes sent and received by the broker
@@ -93,11 +97,12 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	- noise		% irrelevant events taken but dropped
 	
 8. Log management
-	Start up log classes can be controlled in the fubar application meta file, src/fubar.app.src.
+	Start up log classes can be controlled in the fubar application meta file,
+	src/fubar.app.src.
 	~         {fubar_log, [{dir, "priv/log"},
 	~                      {max_bytes, 10485760},
 	~                      {max_files, 10},
-	~                      {classes, [trace, error]}
+	~                      {classes, [{trace, hide}, {warning, show}]}
 	~                     ]},
 	
 	Other log classes - warning, info or debug - can be turned on/off by putting
@@ -105,12 +110,12 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 	(fubar@host)1> fubar_log:open(debug).
 	
 	After turning a log class on, fubar_log:show/1, fubar_log:hide/1 controls
-	whether or not to print the log in the shell.
+	whether or not to print the log to screen.
 	(fubar@host)2> fubar_log:show(debug).
 	(fubar@host)3> fubar_log:hide(trace).
 	
-	Without regard to the show/hide status of a log class, logs in the class
-	are stored in filesystem until fubar_log:close/1 is called.
+	Without regard to the show/hide status of a log class, logs in the open
+	classes are stored in filesystem until fubar_log:close/1 is called.
 
 9. SSL support
 	9.1. Prepare a certificate authority
@@ -127,22 +132,30 @@ An MQTT message broker written in erlang targeted to support internet scale appl
 		$ openssl genrsa -out ../key.pem 2048
 		$ openssl req -new -key ../key.pem -out ../req.pem -outform PEM \
 			-subj /CN=SomeHostName/O=YourOrganizationName/ -nodes
-		$ openssl ca -config openssl.cnf -in ../req.pem -out ../cert.pem -notext \
-			-batch -extensions server_ca_extensions
+		$ openssl ca -config openssl.cnf -in ../req.pem -out ../cert.pem
+			-notext -batch -extensions server_ca_extensions
 		$ openssl pkcs12 -export -in ../cert.pem -out ../keycert.p12 \
 			-inkey ../key.pem -passout pass:YourPassword
 		
+		The processes in 9.1 and 9.2 are stored in batch script
+		priv/ssl/ca/new-certs.sh.  So you can just,
+		
+		$ cd priv/ssl/ca
+		$ ./new-certs.sh
+		
 	9.3. Testing
-		Use mqtts_port command line parameter to start an SSL listener when starting the broker.
+		Use mqtts_port command line parameter to start an SSL listener when
+		starting the broker.
 		$ cd ../../..
-		$ make test mqtts_port=1882
+		$ make test mqtts_port=8883
 		(fubar@host)1>
 		
 		Test basic connection with openssl s_client.
-		$ openssl s_client -connect localhost:1882
+		$ openssl s_client -connect localhost:8883
 		
 		If it succeeds, use {transport, ranch_ssl} option on the client side.
 		$ make client
 		1> ssl:start().
-		2> mqtt_client:start([{port, 1882},{transport, ranch_ssl},{client_id, <<"ssltest">>}]).
+		2> mqtt_client:start([{port, 8883},{transport, ranch_ssl},
+			{client_id, <<"ssltest">>}]).
 	

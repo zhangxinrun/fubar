@@ -33,7 +33,7 @@
 %% Exports
 %%
 -export([start_link/0, log/3, trace/2, dump/0, dump/2,
-		 open/1, close/1, show/1, hide/1, interval/1, state/0]).
+		 open/1, close/1, show/0, show/1, hide/0, hide/1, interval/1, state/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% @doc Start a log manager.
@@ -111,11 +111,19 @@ close(Class) ->
 	gen_server:call(?MODULE, {close, Class}).
 
 %% @doc Print logs in a class to tty.
+-spec show() -> ok.
+show() ->
+	gen_server:call(?MODULE, show).
+
 -spec show(atom()) -> ok.
 show(Class) ->
 	gen_server:call(?MODULE, {show, Class}).
 
 %% @doc Hide logs in a class from tty.
+-spec hide() -> ok.
+hide() ->
+	gen_server:call(?MODULE, hide).
+
 -spec hide(atom()) -> ok.
 hide(Class) ->
 	gen_server:call(?MODULE, {hide, Class}).
@@ -135,11 +143,14 @@ state() ->
 %%
 init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=Classes, interval=T}) ->
 	?INFO(["log manager started", State]),
-	Open = fun(Class, Acc) ->
+	Open = fun({Class, Show}, Acc) ->
 				   case open(Class, Dir, L, N) of
-					   {ok, Result} ->
+					   {ok, {Class, Current}} ->
 						   ?INFO(["disk_log open", Class]),
-						   Acc++[Result];
+						   Acc++[{Class, Current, case Show of
+													  show -> standard_io;
+													  _ -> null
+												  end}];
 					   Error ->
 						   ?ERROR(["can't open disk_log", Class, Error]),
 						   Acc
@@ -149,9 +160,9 @@ init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=Classes, interval
 
 handle_call({open, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 	case open(Class, State#?MODULE.dir, State#?MODULE.max_bytes, State#?MODULE.max_files) of
-		{ok, NewClass} ->
+		{ok, {Class, Current}} ->
 			?INFO(["disk_log open", Class]),
-			{reply, ok, State#?MODULE{classes=[NewClass | Classes]}, T};
+			{reply, ok, State#?MODULE{classes=[{Class, Current, null} | Classes]}, T};
 		Error ->
 			?ERROR(["can't open disk_log", Class]),
 			{reply, Error, State, T}
@@ -170,6 +181,9 @@ handle_call({close, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 		false ->
 			{reply, {error, not_found}, State, T}
 	end;
+handle_call(show, _, State=#?MODULE{interval=T}) ->
+	Classes = [{Class, Current, standard_io} || {Class, Current, _} <- State#?MODULE.classes],
+	{reply, ok, State#?MODULE{classes=Classes}, T};
 handle_call({show, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 	case lists:keytake(Class, 1, Classes) of
 		{value, {Class, Current, _}, Rest} ->
@@ -177,6 +191,9 @@ handle_call({show, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 		false ->
 			{reply, {error, not_found}, State, T}
 	end;
+handle_call(hide, _, State=#?MODULE{interval=T}) ->
+	Classes = [{Class, Current, null} || {Class, Current, _} <- State#?MODULE.classes],
+	{reply, ok, State#?MODULE{classes=Classes}, T};
 handle_call({hide, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 	case lists:keytake(Class, 1, Classes) of
 		{value, {Class, Current, _}, Rest} ->
@@ -233,7 +250,7 @@ open(Class, Dir, L, N) ->
 		   {error, Reason};
 	   _ ->
 		   {ok, Current} = consume_log(Class, start, null),
-		   {ok, {Class, Current, standard_io}}
+		   {ok, {Class, Current}}
    end.
 
 consume_log(Log, Last, Io) ->

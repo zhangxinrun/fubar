@@ -33,17 +33,19 @@
 -include("mqtt.hrl").
 -include("sasl_log.hrl").
 -include("props_to_record.hrl").
+-include_lib("stdlib/include/qlc.hrl").
 
 %%
 %% Records and types
 %%
 -record(?MODULE, {name :: binary(),	% topic name
-				  subscribers = [] :: [{binary(), mqtt_qos(), term(), pid(), module()}],	% [{client_id, qos, monitor, session, module}]
+				  subscribers = [] :: [{binary(), binary(), mqtt_qos(), term(), pid(), module()}],	% [{id, client_id, qos, monitor, session, module}]
 				  fubar :: #fubar{},	% retained fubar
 				  trace = false :: boolean()}).	% trace flag
 
 %% @doc Subscriber database schema.
--record(mqtt_subscriber, {topic = '_' :: binary(),		% topic name
+-record(mqtt_subscriber, {id = '_' :: binary(),			% primary key
+						  topic = '_' :: binary(),		% topic name
 						  client_id = '_' :: binary(),	% subscriber
 						  qos = '_' :: mqtt_qos(),		% max qos
 						  module = '_' :: module()}).	% subscriber type
@@ -60,8 +62,8 @@
 %% @doc Master mode bootstrap logic.
 boot() ->
 	case mnesia:create_table(mqtt_subscriber, [{attributes, record_info(fields, mqtt_subscriber)},
-											   {disc_copies, [node()]}, {type, bag},
-											   {index, [client_id]}]) of
+											   {disc_copies, [node()]}, {type, set},
+											   {index, [topic, client_id]}]) of
 		{atomic, ok} ->
 			?INFO({"table created", mqtt_subscriber}),
 			ok;
@@ -119,16 +121,17 @@ init(State=#?MODULE{name=Name}) ->
 	fubar_log:log(resource, ?MODULE, [Name, init]),
 	% Restore all the subscriptions and retained message from database.
 	process_flag(trap_exit, true),
-	Subscribers = mnesia:dirty_read(mqtt_subscriber, Name),
+	Q = qlc:q([{Id, ClientId, QoS, undefined, undefined, Module} ||
+				   #mqtt_subscriber{id=Id, topic=Topic, client_id=ClientId, qos=QoS, module=Module}
+					   <- mnesia:table(mqtt_subscriber),
+				   Topic =:= Name]),
+	Subscribers = mnesia:async_dirty(fun() -> qlc:e(Q) end),
 	Fubar = case mnesia:dirty_read(mqtt_retained, Name) of
 				[#mqtt_retained{topic=Name, fubar=Value}] -> Value;
 				[] -> undefined
 			end,
-	fubar_route:up(State#?MODULE.name, ?MODULE),
-	F = fun(#mqtt_subscriber{client_id=ClientId, qos=QoS, module=Module}) ->
-			{ClientId, QoS, undefined, undefined, Module}
-		end,
-	{ok, State#?MODULE{subscribers=lists:map(F, Subscribers), fubar=Fubar}}.
+	fubar_route:up(Name, ?MODULE),
+	{ok, State#?MODULE{subscribers=Subscribers, fubar=Fubar}}.
 
 %% State query for admin operation.
 handle_call(state, _, State) ->
@@ -138,7 +141,7 @@ handle_call({trace, Value}, _, State) ->
 	{reply, ok, State#?MODULE{trace=Value}};
 
 %% Subscribe request from a client session.
-handle_call(Fubar=#fubar{payload={subscribe, QoS, Module}}, {Pid, _}, State=#?MODULE{name=Name}) ->
+handle_call(Fubar=#fubar{payload={subscribe, QoS, Module, Pid}}, _, State=#?MODULE{name=Name}) ->
 	case fubar:get(to, Fubar) of
 		Name ->
 			fubar_log:trace({Name, subscribe}, Fubar),
@@ -172,6 +175,36 @@ handle_call(Request, From, State) ->
 	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown call", Request, From]),
 	{reply, ok, State}.
 
+%% Subscribe request from a client session.
+handle_cast(Fubar=#fubar{payload={subscribe, QoS, Module, Pid}}, State=#?MODULE{name=Name}) ->
+	case fubar:get(to, Fubar) of
+		Name ->
+			fubar_log:trace({Name, subscribe}, Fubar),
+			Subscribers = subscribe(Name, {fubar:get(from, Fubar), Pid}, {QoS, Module}, State#?MODULE.subscribers),
+			case State#?MODULE.fubar of
+				undefined ->
+					ok;
+				Retained ->
+					gen_server:cast(Pid, fubar:set([{to, fubar:get(from, Fubar)}, {via, Name}], Retained))
+			end,
+			{noreply, State#?MODULE{subscribers=Subscribers}};
+		_ ->
+			fubar_log:log(warning, ?MODULE, [Name, "not mine", Fubar]),
+			{noreply, State}
+	end;
+
+%% Unsubscribe request from a client session.
+handle_cast(Fubar=#fubar{payload=unsubscribe}, State=#?MODULE{name=Name}) ->
+	case fubar:get(to, Fubar) of
+		Name ->
+			fubar_log:trace({Name, unsubscribe}, Fubar),
+			Subscribers = unsubscribe(Name, fubar:get(from, Fubar), State#?MODULE.subscribers),
+			{noreply, State#?MODULE{subscribers=Subscribers}};
+		_ ->
+			fubar_log:log(warning, ?MODULE, [Name, "not mine", Fubar]),
+			{noreply, State}
+	end;
+
 %% Publish request.
 handle_cast(Fubar=#fubar{payload=#mqtt_publish{}}, State=#?MODULE{name=Name, trace=Trace}) ->
 	case fubar:get(to, Fubar) of
@@ -198,10 +231,10 @@ handle_cast(Message, State) ->
 
 %% Likely to be a subscriber down event
 handle_info({'DOWN', Monitor, _, Pid, Reason}, State=#?MODULE{name=Name}) ->
-	case lists:keytake(Monitor, 3, State#?MODULE.subscribers) of
-		{value, {ClientId, QoS, Monitor, Pid, Module}, Subscribers} ->
+	case lists:keytake(Monitor, 4, State#?MODULE.subscribers) of
+		{value, {Id, ClientId, QoS, Monitor, Pid, Module}, Subscribers} ->
 			fubar_log:log(debug, ?MODULE, [Name, "subscriber down", Pid, Reason]),
-			{noreply, State#?MODULE{subscribers=[{ClientId, QoS, undefined, undefined, Module} | Subscribers]}};
+			{noreply, State#?MODULE{subscribers=[{Id, ClientId, QoS, undefined, undefined, Module} | Subscribers]}};
 		false ->
 			fubar_log:log(noise, ?MODULE, [Name, "unknown down", Pid, Reason]),
 			{noreply, State}
@@ -237,11 +270,11 @@ publish(Name, Fubar, Subscribers, Trace) ->
 			 end,
 	Publish = fubar:get(payload, Fubar1),
 	QoS = Publish#mqtt_publish.qos,
-	F = fun({ClientId, MaxQoS, Monitor, Pid, Module}) ->
+	F = fun({Id, ClientId, MaxQoS, Monitor, Pid, Module}) ->
 			case ClientId of
 				From ->
 					% Don't send the message to the sender back.
-					{ClientId, MaxQoS, Monitor, Pid, Module};
+					{Id, ClientId, MaxQoS, Monitor, Pid, Module};
 				_ ->
 					Publish1 = Publish#mqtt_publish{qos=mqtt:degrade(QoS, MaxQoS)},
 					Fubar2 = fubar:set([{to, ClientId}, {payload, Publish1}], Fubar1),
@@ -251,14 +284,14 @@ publish(Name, Fubar, Subscribers, Trace) ->
 								{ok, Addr} ->
 									NewMonitor = monitor(process, Addr),
 									catch gen_server:cast(Addr, Fubar2),
-									{ClientId, MaxQoS, NewMonitor, Addr, Module};
+									{Id, ClientId, MaxQoS, NewMonitor, Addr, Module};
 								_ ->
 									fubar_log:log(warning, ?MODULE, [Name, "can't ensure a subscriber", ClientId]),
-									{ClientId, MaxQoS, undefined, undefined, Module}
+									{Id, ClientId, MaxQoS, undefined, undefined, Module}
 							end;
 						_ ->
 							catch gen_server:cast(Pid, Fubar2),
-							{ClientId, MaxQoS, Monitor, Pid, Module}
+							{Id, ClientId, MaxQoS, Monitor, Pid, Module}
 					end
 			end
 		end,
@@ -266,47 +299,31 @@ publish(Name, Fubar, Subscribers, Trace) ->
 
 subscribe(Name, {ClientId, Pid}, {QoS, Module}, Subscribers) ->
 	% Check if it's a new subscription or not.
-	case lists:keytake(ClientId, 1, Subscribers) of
-		{value, {ClientId, QoS, OldMonitor, _, Module}, Rest} ->
+	case lists:keytake(ClientId, 2, Subscribers) of
+		{value, {Id, ClientId, QoS, OldMonitor, _, Module}, Rest} ->
 			% The same subscription from possibly different client.
 			catch demonitor(OldMonitor, [flush]),
 			Monitor = monitor(process, Pid),
-			[{ClientId, QoS, Monitor, Pid, Module} | Rest];
-		{value, {ClientId, _OldQoS, OldMonitor, _, _OldModule}, Rest} ->
+			[{Id, ClientId, QoS, Monitor, Pid, Module} | Rest];
+		{value, {Id, ClientId, _, OldMonitor, _, _}, Rest} ->
 			% Need to update the subscription.
 			catch demonitor(OldMonitor, [flush]),
-			case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
-				[] ->
-					ok;
-				OldSubscribers ->
-					F = fun(Subscriber) ->
-							mnesia:dirty_delete_object(Subscriber)
-						end,
-					lists:foreach(F, OldSubscribers)
-			end,
-			mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
+			mnesia:dirty_write(#mqtt_subscriber{id=Id, topic=Name, client_id=ClientId, qos=QoS, module=Module}),
 			Monitor = monitor(process, Pid),
-			[{ClientId, QoS, Monitor, Pid, Module} | Rest];
+			[{Id, ClientId, QoS, Monitor, Pid, Module} | Rest];
 		false ->
 			% Not found.  This is a new one.
-			mnesia:dirty_write(#mqtt_subscriber{topic=Name, client_id=ClientId, qos=QoS, module=Module}),
+			Id = uuid:uuid4(),
+			mnesia:dirty_write(#mqtt_subscriber{id=Id, topic=Name, client_id=ClientId, qos=QoS, module=Module}),
 			Monitor = monitor(process, Pid),
-			[{ClientId, QoS, Monitor, Pid, Module} | Subscribers]
+			[{Id, ClientId, QoS, Monitor, Pid, Module} | Subscribers]
 	end.
 
-unsubscribe(Name, ClientId, Subscribers) ->
-	case lists:keytake(ClientId, 1, Subscribers) of
-		{value, {ClientId, _, Monitor, _, _}, Rest} ->
+unsubscribe(_Name, ClientId, Subscribers) ->
+	case lists:keytake(ClientId, 2, Subscribers) of
+		{value, {Id, ClientId, _, Monitor, _, _}, Rest} ->
 			catch demonitor(Monitor, [flush]),
-			case mnesia:dirty_match_object(#mqtt_subscriber{topic=Name, client_id=ClientId}) of
-				[] ->
-					ok;
-				OldSubscribers ->
-					F = fun(Subscriber) ->
-							catch mnesia:dirty_delete_object(Subscriber)
-						end,
-					lists:foreach(F, OldSubscribers)
-			end,
+			mnesia:dirty_delete({mqtt_subscriber, Id}),
 			Rest;
 		false ->
 			Subscribers
