@@ -73,7 +73,7 @@
                         %% if the keep-alive value specified by the client is too small or too big.
                         %% This is not compliant to mqtt spec but a useful extension.
                         %% Set this range wide enough if you don't want the extension.
-                        {valid_keep_alive, {60, 3600}},
+                        {valid_keep_alive, {60, 3600}}
                         
                         %% Module:verify/2 function is used to verify credential in mqtt connect.
                         %% Uncomment the line below to enable authentication.
