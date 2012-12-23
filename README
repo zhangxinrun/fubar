@@ -22,6 +22,13 @@ applications.
 		3> C1 ! mqtt:subscribe([{topics, [<<"t1">>]}]).
 		4> C2 ! mqtt:publish([{topic, <<"t1">>}, {payload, <<"hello!">>}]).
 	
+	3.4. Direct messaging
+		This is an extra feature not originally stated in MQTT specification.
+		One client may use the other client's client id as a topic name to
+		send a message directly to the client.
+		
+		5> C2 ! mqtt:publish([{topic, <<"c1">>}, {payload, <<"world!">>}]).
+	
 4. Shutting down the broker gracefully.
 	(fubar@host)1> fubar:stop().
 	(fubar@host)2> q().
@@ -30,7 +37,7 @@ applications.
 1. Adding a new broker node to existing broker cluster
 	$ make test master=name@host
 	
-	Note) If you want to more than one broker node in a computer,
+	Note) If you want to start more than one broker node in a computer,
 	You have to use different node name and listen port as:
 	$ make test master=name@host node=other mqtt_port=1884
 	
@@ -215,3 +222,17 @@ applications.
 	8> Worker = mqtt_probe:start(Probe, <<"t1">>, <<"...">>, 1000).
 	
 	And so it goes.
+	
+== Configurations ==
+Initial broker configuration is read from ebin/fubar.app which is compiled
+from src/fubar.app.src.  You have to edit src/fubar.app.src to make your
+configuration applied whenever you restart the broker.  Or you can call
+fubar:settings/2 to apply changes while the broker is running.
+
+(fubar@host)1> fubar:settings(mqtt_protocol, {max_packet_size, 8192}).
+
+The above sample shows changing maximum MQTT packet size to 8kB.  This change
+affects all the clients connection from this point on.  Note that some change
+applies immediately but others require further intervention.
+
+Refer src/fubar.app.src for details.

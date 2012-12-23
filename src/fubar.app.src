@@ -5,16 +5,30 @@
   {registered, []},
   {applications, [kernel, stdlib]},
   {mod, {fubar_app, []}},
-  {env, [{fubar_app, [{acceptors, 100},
+  {env, [
+         %% Settings in {Module, [{Key, Value}]} format.
+         
+         %% fubar_app settings control server socket behavior.
+         %% This section can't be changed at runtime.
+         {fubar_app, [
+                      %% Number of minimum acceptors in acceptor pool. 
+                      {acceptors, 100},
+                 
+                      %% Maximum number of connections allowed.
                       {max_connections, infinity},
+                      
+                      %% Default socket options.
+                      %% These are overridden by socket_options in mqtt_protocol settings.
                       {options, [{backlog, 4096}, {nodelay, true}, {reuseaddr, true},
-                                 % Lines below are ssl related options.
-                                 % Modify as needed.
                                  {cacertfile, "priv/ssl/ca/cacert.pem"},
                                  {certfile, "priv/ssl/cert.pem"},
                                  {keyfile, "priv/ssl/key.pem"},
                                  {reuse_sessions, false}, {verify, verify_none}]}
                      ]},
+         
+         %% fubar_log settings control logging behavior.
+         %% This section can't be changed at runtime.
+         %% Use fubar_log:open/1, close/1, show/1 and hide/1 functions instead.
          {fubar_log, [{dir, "priv/log"},
                       {max_bytes, 10485760},
                       {max_files, 10},
@@ -22,24 +36,66 @@
                       %            {resource, show}, {warning, show}, {debug, hide}, {noise, hide}]}
                       {classes, [{trace, show}, {access, hide}, {resource, hide}, {warning, show}]}
                      ]},
+         
+         %% vm_memory_monitor settings control floodline behavior.
+         %% This section can't be changed at runtime.
+         %% Use vm_memory_monitor:set_vm_memory_high_watermark/1 and
+         %% set_vm_memory_low_watermark/1 functions instead.
          {vm_memory_monitor, [{high_watermark, 0.4},
                               {low_watermark, 0.38}]},
-         {mqtt_protocol, [{max_packet_size, 4096},
+         
+         %% mqtt_protocol settings control mqtt receiver/parser behavior.
+         %% This section can be changed at runtime by fubar:settings/2.
+         {mqtt_protocol, [
+                          {max_packet_size, 4096},
+                          
+                          %% Socket buffers are set small to accept a lot of clients.
                           {socket_options, [{recbuf, 4096}, {sndbuf, 4096}]},
+                          
+                          %% Socket buffers for selected clients are set larger to give more bandwidth.
                           {acl_socket_options, [{recbuf, 262144}, {sndbuf, 262144}]},
+                          
+                          %% Access control list module.
                           {acl, mqtt_acl},
+                          
+                          %% Dispatch module handles all the mqtt messages after parsing.
                           {dispatch, mqtt_server}
                          ]},
-         {mqtt_server, [{timeout, 3000},
+         
+         %% mqtt_server settings control mqtt message handler behavior.
+         %% This section can be changed at runtime by fubar:settings/2.
+         {mqtt_server, [
+                        %% The broker closes the connection if a client doesn't send an mqtt connect within given time.
+                        {timeout, 3000},
+                        
+                        %% mqtt spec states that a client should specify keep-alive value in mqtt connect.
+                        %% But this broker suggests different keep-alive value in mqtt connack
+                        %% if the keep-alive value specified by the client is too small or too big.
+                        %% This is not compliant to mqtt spec but a useful extension.
+                        %% Set this range wide enough if you don't want the extension.
                         {valid_keep_alive, {60, 3600}},
-                        {auth, undefined}
+                        
+                        %% Module:verify/2 function is used to verify credential in mqtt connect.
+                        %% Uncomment the line below to enable authentication.
                         % {auth, mqtt_account}
                        ]},
-         {mqtt_session, [{transaction_timeout, 60000},
+         
+         %% mqtt_session settings control mqtt session behavior.
+         %% This section can be changed at runtime by fubar:settings/2.
+         {mqtt_session, [
+                         %% It drops transactions that are not complete within given time.
+                         {transaction_timeout, 60000},
+                         
+                         %% It stores mqtt messages for temporarily offline clients.
+                         %% But the number of offline messages are limited.
                          {buffer_limit, 3},
+                         
+                         %% It sends duplicate mqtt messages to a client for higher qos.
+                         %% Retry interval and maximum number of retries are set in prior.
                          {max_retries, 5},
                          {retry_after, 10000}]},
-         {mqtt_topic, [{timeout, 10000}]}
+         
+         {mqtt_topic, []}
         ]}
  ]
 }.

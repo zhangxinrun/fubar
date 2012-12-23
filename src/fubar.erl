@@ -66,10 +66,14 @@ settings(Module) ->
 
 %% @doc Set settings to the application metadata.
 %%      This operation is not persistent.  Changes get lost when node gets down and up.
-%% @sample fubar:settings(?MODULE, [{key,value}]).
--spec settings(module(), proplist(atom(), term())) -> ok.
-settings(Module, Props) ->
-	application:set_env(?MODULE, Module, Props).
+%% @sample fubar:settings(?MODULE, {key, value}).
+-spec settings(module(), {atom(), term()} | proplist(atom(), term())) -> ok.
+settings(Module, {Key, Value}) ->
+	Settings = settings(Module),
+	NewSettings = replace({Key, Value}, Settings),
+	application:set_env(?MODULE, Module, NewSettings);
+settings(Module, Settings) ->
+	application:set_env(?MODULE, Module, Settings).
 
 %% @doc Create a fubar.
 %%      Refer fubar.hrl for field definition.
@@ -198,6 +202,13 @@ stamp({Value, T}, _Now) ->
 	{Value, T};
 stamp(Value, Now) ->
 	{Value, Now}.
+
+replace({Key, Value}, []) ->
+	[{Key, Value}];
+replace({Key, Value}, [{Key, _} | Rest]) ->
+	[{Key, Value} | Rest];
+replace({Key, Value}, [NoMatch | Rest]) ->
+	[NoMatch | replace({Key, Value}, Rest)].
 
 %%
 %% Tests
