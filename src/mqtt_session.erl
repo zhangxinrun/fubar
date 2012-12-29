@@ -172,6 +172,10 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=B
 	catch unlink(OldClient),
 	exit(OldClient, kill),
 	link(Client),
+	case State#?MODULE.socket_options of
+		undefined -> ok;
+		Options -> Client ! {setopts, Options}
+	end,
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
 handle_call(clean, _, State) ->

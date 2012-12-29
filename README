@@ -42,7 +42,7 @@ applications.
 	$ make test master=name@host node=other mqtt_port=1884
 	
 2. Using account control
-	Modify {auth, undefined} in src/fubar.app.src as {auth, mqtt_account}.
+	Uncomment {auth, mqtt_account} in src/fubar.app.src to enable auth.
 	Then, call mqtt_account:update/2 as:
 	(fubar@host)1> mqtt_account:update(<<"romeo">>, <<"1234">>).
 	
@@ -83,7 +83,7 @@ applications.
 		
 7. Dumping logs to text files
 	SASL logs can be taken as:
-	$ make log
+	$ make dump
 	
 	SASL logs show events happened in the start-up process and events not dealt
 	with by the application.
@@ -95,34 +95,68 @@ applications.
 	(fubar@host)1> fubar_log:dump().
 	
 	Log classes are:
+	- access	% network addresses of clients and disconnect events
 	- packet	% bytes sent and received by the broker
 	- protocol	% mqtt messages sent and received by the broker
 	- resource	% long lasting resources such as sessions and topics
-	- trace		% fubar packets marked as trace
-	- warning	% abnormal conditions that are not considered critical
 	- debug		% message put for debugging purpose
-	- noise		% irrelevant events taken but dropped
+	- info		% irrelevant events taken but dropped
+	- warning	% abnormal conditions that are not considered critical
+	- error		% irrecoverable failures
+	- trace		% fubar packets marked as trace
 	
 8. Log management
-	Start up log classes can be controlled in the fubar application meta file,
-	src/fubar.app.src.
+	Basically, two types of logs are used in fubar.  One is error_logger and the
+	other is disk_log.  Most of the runtime events use disk_log and system
+	start-up, shutdown events use error_logger.  error_logger is also called
+	as SASL log.  The other difference is the fact that disk_log supports
+	distributed logging but SASL log doesn't, which means that you can read
+	all the disk_logs created in many nodes in one place but you have to go
+	to each node to read SASL log.  Also, you can open/close/redirect disk_log
+	at runtime.  Refer fubar_log:open/1, close/1, out/1, out/2 for more info.
+	
+	Log configuration stored in src/fubar.app.src controls both logs.
 	~         {fubar_log, [{dir, "priv/log"},
 	~                      {max_bytes, 10485760},
 	~                      {max_files, 10},
-	~                      {classes, [{trace, hide}, {warning, show}]}
+	~                      {classes, [{trace, standard_io}, {warning, "fubar"}]}
 	~                     ]},
 	
-	Other log classes - warning, info or debug - can be turned on/off by putting
-	them in the meta file or at runtime by calling fubar_log:open/1.
-	(fubar@host)1> fubar_log:open(debug).
+	- dir		% Log files are left under <dir>/<node> usually "priv/log/fubar"
+	- max_bytes	% Maximum individual log file size per class
+	- max_files	% Maximum number of rolling log files per class
+	- classes	% Initial disk_log classes to open
 	
-	After turning a log class on, fubar_log:show/1, fubar_log:hide/1 controls
-	whether or not to print the log to screen.
-	(fubar@host)2> fubar_log:show(debug).
-	(fubar@host)3> fubar_log:hide(trace).
+	Classes take {Class, Redirect} as values.  Class is one of the log classes
+	listed in section 7.  Redirect is one of none, standard_io or "prefix".
+	The meaning of the redirect is as follows.
 	
-	Without regard to the show/hide status of a log class, logs in the open
-	classes are stored in filesystem until fubar_log:close/1 is called.
+	- none			% No redirect.  Logs are left in the binary files only.
+	- standard_io	% Redirect to tty.
+	- "prefix"		% Redirect to daily log files with the prefix.
+	          		% e.g, "prefix_2012-12-29.log"
+	
+	As noted before, disk_log is distributed log.  Common practice to use
+	distributed log in production is to use one node for central log consumer
+	and set all the other nodes as log producer.  To configure your system like
+	this, start a node with 'make monitor' command from a computer.  Then you
+	have a node 'fubar_monitor@host1'.  Now start other nodes with
+	'make run master=fubar_monitor@host1' command from other computers.  You
+	may turn all the log classes off in all the other nodes and control in only
+	one place, the monitor node.
+	
+	You will find following files under the log directory.
+	
+	- 1, 2,..., index	% SASL logs, binary rolling files.
+	- access.*,...		% disk_logs for each class, binary rolling files.
+	- run_erl.log		% Broker start-up linux command (production only).
+	- erlang.log.*		% Erlang shell input/output history (production only).
+	- *_YYYY-MM-DD.log	% Daily logs, text files without size limit.
+	
+	If you have daily logs in your log directory, you have to delete them
+	regularly.  They are produced if you redirect any disk_log to file by
+	setting {Class, "prefix"} in src/fubar.app.src or by calling
+	fubar_log:out(Class, "prefix").
 
 9. SSL support
 	9.1. Prepare a certificate authority

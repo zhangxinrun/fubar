@@ -10,6 +10,19 @@
 -behavior(gen_server).
 
 %%
+%% Exports
+%%
+-export([start_link/0,		% Start log manager
+		 access/2, packet/2, protocol/2, resource/2, debug/2, info/2, warning/2, error/2, trace/2,	% Per class logging
+		 log/3,				% Generic logging
+		 dump/0, dump/2,	% Dump logs to text
+		 open/1, close/1,	% Open/close logs
+		 out/1, out/2,		% Control log output
+		 interval/1,		% Control log output interval
+		 state/0			% Check log manager state
+		]).
+
+%%
 %% Includes
 %%
 -ifdef(TEST).
@@ -24,20 +37,15 @@
 %% Macros, records and types
 %%
 -record(?MODULE, {dir = "priv/log" :: string(),
-				  max_bytes = 10485760 :: integer(),
+				  max_bytes = 1048576 :: integer(),
 				  max_files = 10 :: integer(),
-				  classes = [] :: [{atom(), term(), null | standard_io | pid()}],
-				  interval = 500 :: timeout()}).
+				  classes = [] :: [{atom(), term(), none | standard_io | pid() | {string(), string(), pid()}}],
+				  interval = 100 :: timeout()}).
 
-%%
-%% Exports
-%%
--export([start_link/0, log/3, trace/2, dump/0, dump/2,
-		 open/1, close/1, show/0, show/1, hide/0, hide/1, interval/1, state/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% @doc Start a log manager.
-%%      The log manager process manages disk_logs and polls them.
+%%      The log manager process manages disk_logs and polls them to redirect output.
 -spec start_link() -> {ok, pid()} | {error, reason()}.
 start_link() ->
 	State = ?PROPS_TO_RECORD(fubar:settings(?MODULE), ?MODULE),
@@ -46,33 +54,66 @@ start_link() ->
 	ok = filelib:ensure_dir(Path++"/"),
 	gen_server:start({local, ?MODULE}, ?MODULE, State#?MODULE{dir=Path}, []).
 
-%% @doc Leave a log.
-%%      The log is dropped unless the class is open in advance.
-%% @sample fubar_log:log(debug, my_module, Term).
--spec log(atom(), term(), term()) -> ok | {error, reason()}.
-log(Class, Tag, Term) ->
-	{{Y, M, D}, {H, Min, S}} = calendar:universal_time(),
-	Timestamp = lists:flatten(io_lib:format("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B",
-											[Y, M, D, H, Min, S])),
-	catch disk_log:log(Class, {{Class, Timestamp}, {Tag, self()}, Term}).
+%% @doc Access log records client connect/disconnect events.
+-spec access(module(), term()) -> ok | {error, reason()}.
+access(Tag, Term) ->
+	log(access, Tag, Term).
 
-%% @doc Leave a special trace type log.
-%% @sample fubar_log:trace(my_module, Fubar).
+%% @doc Packet log records binary packets to/from clients.
+-spec packet(module(), term()) -> ok | {error, reason()}.
+packet(Tag, Term) ->
+	log(packet, Tag, Term).
+
+%% @doc Protocol log records messages.
+-spec protocol(module(), term()) -> ok | {error, reason()}.
+protocol(Tag, Term) ->
+	log(protocol, Tag, Term).
+
+%% @doc Resource log records session/topic create/destroy events.
+-spec resource(module(), term()) -> ok | {error, reason()}.
+resource(Tag, Term) ->
+	log(resource, Tag, Term).
+
+%% @doc Debug log records various debugging checkpoints.
+-spec debug(module(), term()) -> ok | {error, reason()}.
+debug(Tag, Term) ->
+	log(debug, Tag, Term).
+
+%% @doc Info log records normal events.
+-spec info(module(), term()) -> ok | {error, reason()}.
+info(Tag, Term) ->
+	log(info, Tag, Term).
+
+%% @doc Warning log records abnormal but not critical events.
+-spec warning(module(), term()) -> ok | {error, reason()}.
+warning(Tag, Term) ->
+	log(warning, Tag, Term).
+
+%% @doc Error log records abnormal and critical events.
+-spec error(module(), term()) -> ok | {error, reason()}.
+error(Tag, Term) ->
+	log(error, Tag, Term).
+
+%% @doc Trace log records a message with routing info and timing.
 -spec trace(term(), #fubar{}) -> ok.
 trace(_, #fubar{id=undefined}) ->
 	ok;
 trace(Tag, #fubar{id=Id, origin={Origin, T1}, from={From, T2}, via={Via, T3}, payload=Payload}) ->
 	Now = now(),
-	Calendar = calendar:now_to_universal_time(Now),
-	Timestamp = httpd_util:rfc1123_date(Calendar),
-	catch disk_log:log(trace, {{trace, Timestamp}, {Tag, self()},
-							   {fubar, Id},
-							   {since, {Origin, timer:now_diff(Now, T1)/1000},
-									   {From, timer:now_diff(Now, T2)/1000},
-									   {Via, timer:now_diff(Now, T3)/1000}},
-							   {payload, Payload}}).
+	log(trace, Tag, [{fubar, Id}, {since, {Origin, timer:now_diff(Now, T1)/1000},
+										  {From, timer:now_diff(Now, T2)/1000},
+										  {Via, timer:now_diff(Now, T3)/1000}},
+					 {payload, Payload}]).
 
-%% @doc Dump all log classes to text log files.
+%% @doc Generic logging.
+-spec log(atom(), term(), term()) -> ok | {error, reason()}.
+log(Class, Tag, Term) ->
+	{{Y, M, D}, {H, Min, S}} = calendar:universal_time(),
+	Date = lists:flatten(io_lib:format("~4..0B-~2..0B-~2..0B", [Y, M, D])),
+	Time = lists:flatten(io_lib:format("~2..0B:~2..0B:~2..0B", [H, Min, S])),
+	catch disk_log:log(Class, [Date, Time, node(), self(), Tag, Term]).
+
+%% @doc Dump all log classes to text files.
 dump() ->
 	case state() of
 		#?MODULE{dir=Dir, classes=Classes} ->
@@ -88,7 +129,7 @@ dump() ->
 			Error
 	end.
 
-%% @doc Dump a log class to a text log file.
+%% @doc Dump a log class to a text file.
 dump(Class, Filename) ->
 	case state() of
 		#?MODULE{dir=Dir} ->
@@ -98,37 +139,26 @@ dump(Class, Filename) ->
 	end.
 
 %% @doc Open a log class.
-%%      Opening a log class doesn't mean the logs in the class is shown in tty.
-%%      Need to call show/1 explicitly to do that.
 -spec open(atom()) -> ok | {error, reason()}.
 open(Class) ->
 	gen_server:call(?MODULE, {open, Class}).
 
 %% @doc Close a log class.
-%%      Closing a log class mean that the logs in the class is no longer stored.
 -spec close(atom()) -> ok.
 close(Class) ->
 	gen_server:call(?MODULE, {close, Class}).
 
-%% @doc Print logs in a class to tty.
--spec show() -> ok.
-show() ->
-	gen_server:call(?MODULE, show).
+%% @doc Redirect all open logs.
+-spec out(none | standard_io | pid() | string()) -> ok.
+out(Io) ->
+	gen_server:call(?MODULE, {out, Io}).
 
--spec show(atom()) -> ok.
-show(Class) ->
-	gen_server:call(?MODULE, {show, Class}).
+%% @doc Redirect an open log.
+-spec out(atom(), none | standard_io | pid() | string()) -> ok.
+out(Class, Io) ->
+	gen_server:call(?MODULE, {out, Class, Io}).
 
-%% @doc Hide logs in a class from tty.
--spec hide() -> ok.
-hide() ->
-	gen_server:call(?MODULE, hide).
-
--spec hide(atom()) -> ok.
-hide(Class) ->
-	gen_server:call(?MODULE, {hide, Class}).
-
-%% @doc Set tty refresh interval.
+%% @doc Set log redirect interval.
 -spec interval(timeout()) -> ok.
 interval(T) ->
 	gen_server:call(?MODULE, {interval, T}).
@@ -141,28 +171,39 @@ state() ->
 %%
 %% Callback Functions
 %%
-init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=Classes, interval=T}) ->
+init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=List, interval=T}) ->
 	?INFO(["log manager started", State]),
-	Open = fun({Class, Show}, Acc) ->
-				   case open(Class, Dir, L, N) of
-					   {ok, {Class, Current}} ->
-						   ?INFO(["disk_log open", Class]),
-						   Acc++[{Class, Current, case Show of
-													  show -> standard_io;
-													  _ -> null
-												  end}];
-					   Error ->
-						   ?ERROR(["can't open disk_log", Class, Error]),
-						   Acc
-				   end
-		   end,
-	{ok, State#?MODULE{classes=lists:foldl(Open, [], Classes)}, T}.
+	% Open all the log classes first and close some of them.
+	All = lists:foldl(fun(Class, Acc) ->
+							  case open(Class, Dir, L, N) of
+								  {ok, {Class, Current}} ->
+									  ?INFO(["disk_log open", Class]),
+									  Acc++[{Class, Current}];
+								  Error ->
+									  ?ERROR(["can't open disk_log", Class, Error]),
+									  Acc
+							  end
+					  end, [], [access, packet, protocol, resource, debug, info, warning, error, trace]),
+	Classes = lists:foldl(fun({Class, Current}, Acc) ->
+								  case lists:keyfind(Class, 1, List) of
+									  {Class, Out} when is_list(Out) ->
+										  Prefix = filename:join(Dir, Out),
+										  Acc++[{Class, Current, {Prefix, undefined, undefined}}];
+									  {Class, Out} ->
+										  Acc++[{Class, Current, Out}];
+									  false ->
+										  disk_log:close(Class),
+										  ?INFO(["disk_log closed", Class]),
+										  Acc
+								  end
+						  end, [], All),
+	{ok, State#?MODULE{classes=Classes}, T}.
 
 handle_call({open, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 	case open(Class, State#?MODULE.dir, State#?MODULE.max_bytes, State#?MODULE.max_files) of
 		{ok, {Class, Current}} ->
 			?INFO(["disk_log open", Class]),
-			{reply, ok, State#?MODULE{classes=[{Class, Current, null} | Classes]}, T};
+			{reply, ok, State#?MODULE{classes=[{Class, Current, none} | Classes]}, T};
 		Error ->
 			?ERROR(["can't open disk_log", Class]),
 			{reply, Error, State, T}
@@ -181,23 +222,32 @@ handle_call({close, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 		false ->
 			{reply, {error, not_found}, State, T}
 	end;
-handle_call(show, _, State=#?MODULE{interval=T}) ->
-	Classes = [{Class, Current, standard_io} || {Class, Current, _} <- State#?MODULE.classes],
+handle_call({out, Io}, _, State=#?MODULE{classes=OldClasses, interval=T}) ->
+	Classes = case Io of
+				  String when is_list(String) ->
+					  Prefix = filename:join(State#?MODULE.dir, String),
+					  [{Class, Current, {Prefix, undefined, undefined}} || {Class, Current, _} <- OldClasses];
+				  _ ->
+					  [{Class, Current, Io} || {Class, Current, _} <- OldClasses]
+			  end,
 	{reply, ok, State#?MODULE{classes=Classes}, T};
-handle_call({show, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
-	case lists:keytake(Class, 1, Classes) of
-		{value, {Class, Current, _}, Rest} ->
-			{reply, ok, State#?MODULE{classes=[{Class, Current, standard_io} | Rest]}, T};
-		false ->
-			{reply, {error, not_found}, State, T}
-	end;
-handle_call(hide, _, State=#?MODULE{interval=T}) ->
-	Classes = [{Class, Current, null} || {Class, Current, _} <- State#?MODULE.classes],
-	{reply, ok, State#?MODULE{classes=Classes}, T};
-handle_call({hide, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
-	case lists:keytake(Class, 1, Classes) of
-		{value, {Class, Current, _}, Rest} ->
-			{reply, ok, State#?MODULE{classes=[{Class, Current, null} | Rest]}, T};
+handle_call({out, Class, Io}, _, State=#?MODULE{classes=OldClasses, interval=T}) ->
+	case lists:keytake(Class, 1, OldClasses) of
+		{value, {Class, Current, OldIo}, Rest} ->
+			case OldIo of
+				{_, _, File} ->
+					catch file:close(File);
+				_ ->
+					ok
+			end,
+			Classes = case Io of
+						  String when is_list(String) ->
+							  Prefix = filename:join(State#?MODULE.dir, String),
+							  [{Class, Current, {Prefix, undefined, undefined}} | Rest];
+						  _ ->
+							  [{Class, Current, Io} | Rest]
+					  end,
+			{reply, ok, State#?MODULE{classes=Classes}, T};
 		false ->
 			{reply, {error, not_found}, State, T}
 	end;
@@ -216,8 +266,8 @@ handle_cast(Message, State) ->
 handle_info(timeout, State) ->
 	F = fun({Class, Last, Io}, Acc) ->
 			case consume_log(Class, Last, Io) of
-				{ok, Current} ->
-					Acc ++ [{Class, Current, Io}];
+				{ok, Current, NewIo} ->
+					Acc ++ [{Class, Current, NewIo}];
 				Error ->
 					?ERROR(["can't consume disk_log", Class, Error]),
 					Acc
@@ -245,11 +295,19 @@ code_change(OldVsn, State, Extra) ->
 %%
 open(Class, Dir, L, N) ->
    File = filename:join(Dir, io_lib:format("~s", [Class])),
-   case disk_log:open([{name, Class}, {file, File}, {type, wrap}, {size, {L, N}}]) of
+   Size = case filelib:last_modified(File) of
+			  0 ->
+				  {L, N};
+			  _ ->
+				  ?INFO(["disk_log already exists, applying previous size"]),
+				  infinity
+		  end,
+   case disk_log:open([{name, Class}, {file, File}, {type, wrap},
+					   {size, Size}, {distributed, [node()]}]) of
 	   {error, Reason} ->
 		   {error, Reason};
 	   _ ->
-		   {ok, Current} = consume_log(Class, start, null),
+		   {ok, Current, _} = consume_log(Class, start, none),
 		   {ok, {Class, Current}}
    end.
 
@@ -258,17 +316,38 @@ consume_log(Log, Last, Io) ->
 		{error, Reason} ->
 			{error, Reason};
 		eof ->
-			{ok, Last};
+			{ok, Last, Io};
 		{Current, Terms} ->
 			case Io of
-				null ->
-					ok;
+				none ->
+					{ok, Last, Io};
+				{Prefix, Suffix, File} ->
+					NewIo = update_datelog({Prefix, Suffix, File}, Log, Terms),
+					consume_log(Log, Current, NewIo);
 				_ ->
-					Print = fun(Term) -> io:format(Io, "~1000p~n", [Term]) end,
-					lists:foreach(Print, Terms)
-			end,
-			consume_log(Log, Current, Io)
+					lists:foreach(fun(Term) -> print_log(Io, Log, Term) end, Terms),
+					consume_log(Log, Current, Io)
+			end
 	end.
+
+update_datelog(Io, _, []) ->
+	Io;
+update_datelog({Prefix, Suffix, File}, Log, [[Suffix | Term] | Rest]) ->
+	print_log(File, Log, [Suffix | Term]),
+	update_datelog({Prefix, Suffix, File}, Log, Rest);
+update_datelog({Prefix, _Suffix, OldFile}, Log, [[Suffix | Term] | Rest]) ->
+	catch file:close(OldFile),
+	{ok, File} = file:open(Prefix++"_"++Suffix++".log", [append]),
+	print_log(File, Log, [Suffix | Term]),
+	update_datelog({Prefix, Suffix, File}, Log, Rest);
+update_datelog(Io, Log, [_ | Rest]) ->
+	update_datelog(Io, Log, Rest).
+
+print_log(Io, Log, [Date, Time, Node, Pid, Tag, Term]) ->
+	catch io:format(Io, "~-10.8s ~s ~s ~p ~p ~p ~1000p~n",
+					[Log, Date, Time, Node, Pid, Tag, Term]);
+print_log(Io, Log, Term) ->
+	catch io:format(Io, "~-10.8s ~1000p~n", [Log, Term]).
 
 dump(Dir, Class, Filename) ->
 	Path = filename:join(Dir, io_lib:format("~s", [Class])),
