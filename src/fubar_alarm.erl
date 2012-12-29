@@ -85,7 +85,7 @@ init([]) ->
                  alarmed_nodes = sets:new()}}.
 
 handle_call({register, Pid, HighMemMFA}, State) ->
-	fubar_log:log(debug, ?MODULE, [register, Pid]),
+	fubar_log:debug(?MODULE, [register, Pid]),
     {ok, 0 < sets:size(State#alarms.alarmed_nodes),
      internal_register(Pid, HighMemMFA, State)};
 
@@ -118,7 +118,7 @@ handle_event(_Event, State) ->
 
 handle_info({'DOWN', _MRef, process, Pid, _Reason},
             State = #alarms{alertees = Alertees}) ->
-	fubar_log:log(debug, ?MODULE, [unregister, Pid]),
+	fubar_log:debug(?MODULE, [unregister, Pid]),
     {ok, State#alarms{alertees = dict:erase(Pid, Alertees)}};
 
 handle_info(_Info, State) ->

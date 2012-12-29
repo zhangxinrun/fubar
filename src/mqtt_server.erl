@@ -58,7 +58,7 @@
 init(Props) ->
 	DefaultState = ?PROPS_TO_RECORD(fubar:settings(?MODULE), ?MODULE),
 	State = ?PROPS_TO_RECORD(Props, ?MODULE, DefaultState)(),
-	fubar_log:log(debug, ?MODULE, [undefined, init, State]),
+	fubar_log:debug(?MODULE, [undefined, init, State]),
 	% Don't respond anything against tcp connection and apply small initial timeout.
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
 
@@ -71,79 +71,77 @@ init(Props) ->
 		  {stop, reason(), state()}.
 handle_message(Message=#mqtt_connect{client_id=ClientId, username=undefined},
 			   State=#?MODULE{session=undefined, timeout=Timeout, timestamp=Timestamp}) ->
+	fubar_log:protocol(?MODULE, [ClientId, "=>", Message]),
 	case State#?MODULE.auth of
 		undefined ->
-			fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT accepted", undefined]),
 			bind_session(Message, State);
 		_ ->
-			fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT without credential"]),
 			% Give another chance to connect with right credential again.
 			{reply, mqtt:connack([{code, unauthorized}]), State, timeout(Timeout, Timestamp)}
 	end;
 handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username},
 			   State=#?MODULE{session=undefined}) ->
+	fubar_log:protocol(?MODULE, [ClientId, "=>", Message]),
 	case State#?MODULE.auth of
 		undefined ->
-			fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT accepted", Username]),
 			bind_session(Message, State);
 		Auth ->
 			% Connection with credential.
 			case Auth:verify(Username, Message#mqtt_connect.password) of
 				ok ->
-					fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT accepted", Username]),
 					% The client is authorized.
 					% Now bind with the session or create a new one.
 					bind_session(Message, State);
 				{error, not_found} ->
-					fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT not found", Username]),
 					{reply, mqtt:connack([{code, id_rejected}]), State#?MODULE{timestamp=now()}, 0};
 				{error, forbidden} ->
-					fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT forbidden", Username]),
 					{reply, mqtt:connack([{code, forbidden}]), State#?MODULE{timestamp=now()}, 0};
 				Error ->
-					fubar_log:log(protocol, ?MODULE, [ClientId, "=> CONNECT error", Username, Error]),
+					fubar_log:error(?MODULE, ["error in auth module", Auth, Error]),
 					{reply, mqtt:connack([{code, unavailable}]), State#?MODULE{timestamp=now()}, 0}
 			end
 	end;
 handle_message(Message, State=#?MODULE{session=undefined}) ->
 	% All the other messages are not allowed without session.
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> sessionless message", Message]),
+	fubar_log:protocol(?MODULE, [undefined, "=>", Message]),
+	fubar_log:warning(?MODULE, [Message, "before mqtt_connect{}"]),
 	{stop, normal, State#?MODULE{timestamp=now()}};
-handle_message(#mqtt_pingreq{}, State) ->
+handle_message(Message=#mqtt_pingreq{}, State) ->
 	% Reflect ping and refresh timeout.
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> PINGREQ"]),
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= PINGRESP"]),
-	{reply, #mqtt_pingresp{}, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
+	Reply = #mqtt_pingresp{},
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Reply]),
+	{reply, Reply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_publish{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> PUBLISH", Message]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_puback{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> PUBACK"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_pubrec{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> PUBREC"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_pubrel{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> PUBREL"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_pubcomp{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> PUBCOMP"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_subscribe{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=>SUBSCRIBE", Message]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_unsubscribe{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> UNSUBSCRIBE", Message]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Session ! Message,
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
-handle_message(#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> DISCONNECT"]),
+handle_message(Message=#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	case State#?MODULE.clean_session of
 		true ->
 			mqtt_session:clean(Session);
@@ -154,7 +152,8 @@ handle_message(#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
 
 %% Fallback
 handle_message(Message, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "=> UNKNOWN", Message]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
+	fubar_log:warning(?MODULE, [State#?MODULE.client_id, Message, "unknown message"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
 
 %% @doc Handle internal events from, supposedly, the session.
@@ -165,44 +164,42 @@ handle_message(Message, State) ->
 		  {stop, reason(), state()}.
 handle_event(timeout, State=#?MODULE{client_id=ClientId}) ->
 	% General timeout
-	fubar_log:log(debug, ?MODULE, [ClientId, "timed out"]),
-	{stop, normal, State};
-handle_event(timeout, State) ->
+	fubar_log:debug(?MODULE, [ClientId, "timed out"]),
 	{stop, normal, State};
 handle_event(Event, State=#?MODULE{session=undefined}) ->
-	fubar_log:log(warning, ?MODULE, [State#?MODULE.client_id, "sessionless event", Event]),
+	fubar_log:warning(?MODULE, [State#?MODULE.client_id, "sessionless event", Event]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
 handle_event(Event=#mqtt_publish{}, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= PUBLISH", Event]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_puback{}, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= PUBACK"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_pubrec{}, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= PUBREC"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_pubrel{}, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= PUBREL"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_pubcomp{}, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= PUBCOMP"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_suback{}, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= SUBACK"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_unsuback{}, State) ->
-	fubar_log:log(protocol, ?MODULE, [State#?MODULE.client_id, "<= UNSUBACK"]),
+	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
 	{reply, Event, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 
 %% Fallback
 handle_event(Event, State) ->
-	fubar_log:log(noise, ?MODULE, [State#?MODULE.client_id, "unknown event", Event]),
+	fubar_log:debug(?MODULE, [State#?MODULE.client_id, Event, "unknown event"]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}.
 
 %% @doc Finalize the server process.
 -spec terminate(state()) -> ok.
 terminate(#?MODULE{client_id=ClientId}) ->
-	fubar_log:log(debug, ?MODULE, [ClientId, terminate]),
+	fubar_log:debug(?MODULE, [ClientId, terminate]),
 	normal;
 terminate(_) ->
 	normal.
@@ -241,7 +238,7 @@ bind_session(Message=#mqtt_connect{client_id=ClientId}, State) ->
 			 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
 						   session=Session, timeout=Timeout, timestamp=now()}, Timeout};
 		Error ->
-			fubar_log:log(warning, ?MODULE, [ClientId, "session bind failure", Error]),
+			fubar_log:error(?MODULE, [ClientId, "session bind failure", Error]),
 			% Timeout immediately to close just after reply.
 			{reply, mqtt:connack([{code, unavailable}]),
 			 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,

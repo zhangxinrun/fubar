@@ -152,28 +152,28 @@ init(Props) ->
 handle_message(Message, State=#?MODULE{client_id=undefined}) ->
 	% Drop messages from the server before CONNECT.
 	% Ping schedule can be reset because we got a packet anyways.
-	?WARNING([undefined, "<=", Message, "dropping"]),
+	fubar_log:warning(?MODULE, ["unexpected message", "<=", Message, "dropping"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_connack{code=Code}, State=#?MODULE{client_id=ClientId, state=connecting}) ->
 	% Received connack while waiting for one.
 	case Code of
 		accepted ->
-			?DEBUG([ClientId, "<=", Message]),
+			fubar_log:debug(?MODULE, [ClientId, "<=", Message]),
 			{noreply, State#?MODULE{state=connected, timestamp=now()}, State#?MODULE.timeout};
 		unavailable ->
-			?WARNING([ClientId, "<=", Message, "need to restart"]),
+			fubar_log:warning(?MODULE, [ClientId, "<=", Message, "need to restart"]),
 			{stop, unavailable, State};
 		_ ->
-			?ERROR([ClientId, "<=", Message, "stopping"]),
+			fubar_log:error(?MODULE, [ClientId, "<=", Message, "stopping"]),
 			{stop, normal, State}
 	end;
 handle_message(Message, State=#?MODULE{client_id=ClientId, state=connecting}) ->
 	% Drop messages from the server before CONNACK.
-	?WARNING([ClientId, "<=", Message, "dropping"]),
+	fubar_log:warning(?MODULE, [ClientId, "<=", Message, "dropping"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message, State=#?MODULE{client_id=ClientId, state=disconnecting}) ->
 	% Drop messages after DISCONNECT.
-	?WARNING([ClientId, "<=", Message, "dropping"]),
+	fubar_log:warning(?MODULE, [ClientId, "<=", Message, "dropping"]),
 	{noreply, State#?MODULE{timestamp=now(), timeout=0}, 0};
 handle_message(#mqtt_pingresp{}, State) ->
 	% Cancel expiration schedule if there is one.
@@ -184,11 +184,11 @@ handle_message(Message=#mqtt_suback{message_id=MessageId}, State=#?MODULE{client
 	% Subscribe complete.  Stop retrying.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?DEBUG([ClientId, "<=", Message, "for", Request]),
+			fubar_log:debug(?MODULE, [ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
+			fubar_log:info(?MODULE, [ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_unsuback{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
@@ -196,11 +196,11 @@ handle_message(Message=#mqtt_unsuback{message_id=MessageId}, State=#?MODULE{clie
 	% Unsubscribe complete.  Stop retrying.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?DEBUG([ClientId, "<=", Message, "for", Request]),
+			fubar_log:debug(?MODULE, [ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
+			fubar_log:info(?MODULE, [ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_publish{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
@@ -237,11 +237,11 @@ handle_message(Message=#mqtt_puback{message_id=MessageId}, State=#?MODULE{client
 	% Complete a 1-way handshake transaction.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?DEBUG([ClientId, "<=", Message, "for", Request]),
+			fubar_log:debug(?MODULE, [ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
+			fubar_log:info(?MODULE, [ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
@@ -249,13 +249,14 @@ handle_message(Message=#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{client
 	% Commit a 3-way handshake transaction.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
+			fubar_log:debug(?MODULE, [ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			Reply = #mqtt_pubrel{message_id=MessageId},
 			{ok, NewTimer} = timer:send_after(State#?MODULE.retry_after*State#?MODULE.max_retries, {retry, MessageId}),
 			Pool = [{MessageId, Request, State#?MODULE.max_retries, NewTimer} | Rest],
 			{reply, Reply, State#?MODULE{timestamp=now(), retry_pool=Pool}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
+			fubar_log:info(?MODULE, [ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_pubrel{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
@@ -263,11 +264,12 @@ handle_message(Message=#mqtt_pubrel{message_id=MessageId}, State=#?MODULE{client
 	% Complete a server-driven 3-way handshake transaction.
 	case lists:keytake(MessageId, 1, State#?MODULE.wait_buffer) of
 		{value, {MessageId, Request}, Rest} ->
+			fubar_log:debug(?MODULE, [ClientId, "<=", Message, "for", Request]),
 			feedback(ClientId, Request),
 			Reply = #mqtt_pubcomp{message_id=MessageId},
 			{reply, Reply, State#?MODULE{timestamp=now(), wait_buffer=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
+			fubar_log:info(?MODULE, [ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message=#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{client_id=ClientId}) ->
@@ -275,16 +277,16 @@ handle_message(Message=#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{clien
 	% Complete a 3-way handshake transaction.
 	case lists:keytake(MessageId, 1, State#?MODULE.retry_pool) of
 		{value, {MessageId, Request, _, Timer}, Rest} ->
-			?DEBUG([ClientId, "<=", Message, "for", Request]),
+			fubar_log:debug(?MODULE, [ClientId, "<=", Message, "for", Request]),
 			timer:cancel(Timer),
 			{noreply, State#?MODULE{timestamp=now(), retry_pool=Rest}, State#?MODULE.timeout};
 		_ ->
-			?WARNING([ClientId, "<=", Message, "not found, possibly abandoned"]),
+			fubar_log:info(?MODULE, [ClientId, "<=", Message, "not found, possibly abandoned"]),
 			{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}
 	end;
 handle_message(Message, State) ->
 	% Drop unknown messages from the server.
-	?WARNING([State#?MODULE.client_id, "<=", Message, "dropping unknown message"]),
+	fubar_log:debug(?MODULE, [State#?MODULE.client_id, "<=", Message, "dropping unknown message"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
 
 %% @doc Handle internal events.
@@ -297,18 +299,19 @@ handle_event({state, From}, State) ->
 	From ! State,
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
 handle_event(timeout, State=#?MODULE{client_id=undefined}) ->
-	?ERROR([unidentified, timeout, "this is impossible"]),
+	fubar_log:error(?MODULE, [overload, timeout, "this is impossible"]),
 	{stop, normal, State};
 handle_event(timeout, State=#?MODULE{client_id=ClientId, state=connecting}) ->
-	?WARNING([ClientId, "CONNECT timed out"]),
+	fubar_log:warning(?MODULE, [ClientId, "CONNECT timed out"]),
 	{stop, no_connack, State};
 handle_event(timeout, State=#?MODULE{state=disconnecting}) ->
 	{stop, normal, State};
 handle_event(timeout, State) ->
+	fubar_log:debug(?MODULE, [State#?MODULE.client_id, "=> PINGREQ"]),
 	{ok, Timer} = timer:send_after(State#?MODULE.retry_after, no_pingresp),
 	{reply, #mqtt_pingreq{}, State#?MODULE{timestamp=now(), timer=Timer}, State#?MODULE.timeout};
 handle_event(Event=#mqtt_connect{}, State=#?MODULE{client_id=undefined}) ->
-	?DEBUG([Event#mqtt_connect.client_id, "=>", Event]),
+	fubar_log:debug(?MODULE, [Event#mqtt_connect.client_id, "=>", Event]),
 	{reply, Event, State#?MODULE{client_id=Event#mqtt_connect.client_id,
 								 will=case Event#mqtt_connect.will_topic of
 										  undefined -> undefined;
@@ -323,10 +326,10 @@ handle_event(Event=#mqtt_connect{}, State=#?MODULE{client_id=undefined}) ->
 								 timestamp=now(),
 								 state=connecting}, State#?MODULE.timeout};
 handle_event(Event, State=#?MODULE{client_id=ClientId, state=connecting}) ->
-	?WARNING([ClientId, Event, "not connected yet, dropping"]),
+	fubar_log:warning(?MODULE, [ClientId, Event, "not connected yet, dropping"]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
 handle_event(no_pingresp, State=#?MODULE{client_id=ClientId}) ->
-	?WARNING([ClientId, "PINGREQ timed out"]),
+	fubar_log:warning(?MODULE, [ClientId, "PINGREQ timed out"]),
 	{stop, no_pingresp, State};
 handle_event(Event=#mqtt_subscribe{}, State) ->
 	case Event#mqtt_subscribe.qos of
@@ -383,15 +386,15 @@ handle_event({retry, MessageId}, State=#?MODULE{client_id=ClientId}) ->
 					Pool = [{MessageId, Message, Retry+1, Timer}| Rest],
 					{reply, Message, State#?MODULE{timestamp=now(), retry_pool=Pool}, State#?MODULE.timeout};
 				_ ->
-					?WARNING([ClientId, "=/=", Message, "dropping after retry", Retry]),
+					fubar_log:warning(?MODULE, [ClientId, "=/=", Message, "dropping after retry", Retry]),
 					{noreply, State#?MODULE{retry_pool=Rest}, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}
 			end;
 		_ ->
-			?ERROR([ClientId, MessageId, "not found in retry pool"]),
+			fubar_log:error(?MODULE, [ClientId, MessageId, "not found in retry pool"]),
 			{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}
 	end;
 handle_event(Event, State) ->
-	?WARNING([State#?MODULE.client_id, Event, "dropping unknown event"]),
+	fubar_log:debug(?MODULE, [State#?MODULE.client_id, Event, "dropping unknown event"]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)}.
 
 %% @doc Finalize the client process.

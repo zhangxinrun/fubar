@@ -66,12 +66,16 @@ verify(Addr) ->
 %% @doc Update account.
 -spec update(binary(), binary()) -> ok | {aborted, reason()}.
 update(Addr, Allow) ->
-	catch mnesia:dirty_write(#?MODULE{addr=Addr, allow=Allow}).
+	Result = mnesia:dirty_write(#?MODULE{addr=Addr, allow=Allow}),
+	fubar_log:info(?MODULE, [update, Addr, Allow, Result]),
+	Result.
 
 %% @doc Delete account.
 -spec delete(binary()) -> ok | {aborted, reason()}.
 delete(Addr) ->
-	catch mnesia:dirty_delete(?MODULE, Addr).
+	Result = mnesia:dirty_delete(?MODULE, Addr),
+	fubar_log:info(?MODULE, [delete, Addr, Result]),
+	Result.
 
 %%
 %% Unit Tests

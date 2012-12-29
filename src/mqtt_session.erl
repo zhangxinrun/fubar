@@ -146,11 +146,16 @@ trace(Name, Value) ->
 %% Session start-up sequence.
 init(Props) ->
 	State = ?PROPS_TO_RECORD(Props++fubar:settings(?MODULE), ?MODULE),
-	fubar_log:log(resource, ?MODULE, [State#?MODULE.name, init]),
 	fubar_alarm:register({?MODULE, handle_alert, []}), % to receive alerts
 	process_flag(trap_exit, true),	% to detect client or transaction down
-	fubar_route:up(State#?MODULE.name, ?MODULE),
-	{ok, State}.
+	case fubar_route:up(State#?MODULE.name, ?MODULE) of
+		ok ->
+			fubar_log:resource(?MODULE, [State#?MODULE.name, init]),
+			{ok, State};
+		Error ->
+			fubar_log:error(?MODULE, [State#?MODULE.name, init, Error]),
+			{stop, Error}
+	end.
 
 %% State query for admin operation.
 handle_call(state, _, State) ->
@@ -158,7 +163,7 @@ handle_call(state, _, State) ->
 
 %% Client bind/clean logic for mqtt_server.
 handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=Buffer}) ->
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "linking", Client]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "linking", Client]),
 	link(Client),	% to detect client down and to let client crash when this session down
 	case State#?MODULE.socket_options of
 		undefined -> ok;
@@ -168,7 +173,7 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=B
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
 handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=Buffer}) ->
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "linking", Client, "and killing", OldClient]),
+	fubar_log:warning(?MODULE, [State#?MODULE.name, "linking", Client, "and killing", OldClient]),
 	catch unlink(OldClient),
 	exit(OldClient, kill),
 	link(Client),
@@ -191,7 +196,7 @@ handle_call({trace, Value}, _, State) ->
 
 %% Fallback
 handle_call(Request, From, State) ->
-	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown call", Request, From]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "unknown call", Request, From]),
 	reply(ok, State).
 
 %% Message delivery logic to the client.
@@ -220,20 +225,20 @@ handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=Client}) ->
 					noreply(State#?MODULE{message_id=MessageId, retry_pool=Pool})
 			end;
 		Unknown ->
-			fubar_log:log(noise, ?MODULE, [ClientId, "unknown fubar", Unknown]),
+			fubar_log:debug(?MODULE, [ClientId, "unknown fubar", Unknown]),
 			noreply(State)
 	end;
 
 handle_cast({alert, true}, State) ->
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "alert set"]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "alert set"]),
 	noreply(State#?MODULE{alert=true});
 handle_cast({alert, false}, State) ->
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "alert unset"]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "alert unset"]),
 	noreply(State#?MODULE{alert=false});
 
 %% Fallback
 handle_cast(Message, State) ->
-	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown cast", Message]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "unknown cast", Message]),
 	noreply(State).
 
 %% Message delivery logic to the client (QoS retry).
@@ -265,11 +270,11 @@ handle_info({retry, MessageId}, State=#?MODULE{client=Client}) ->
 					{ok, Timer} = timer:send_after(State#?MODULE.retry_after, {retry, MessageId}),
 					noreply(State#?MODULE{retry_pool=[{MessageId, Fubar, Retry+1, Timer} | Pool]});
 				_ ->
-					fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "dropping after retry", Fubar]),
+					fubar_log:warning(?MODULE, [State#?MODULE.name, "dropping after retry", Fubar]),
 					noreply(State#?MODULE{retry_pool=Pool})
 			end;
 		_ ->
-			fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
+			fubar_log:warning(?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
 			noreply(State)
 	end;
 
@@ -282,7 +287,7 @@ handle_info(Info=#mqtt_publish{message_id=MessageId, dup=true}, State) ->
 			handle_info(Info#mqtt_publish{dup=false}, State);
 		{MessageId, _, _} ->
 			% Found one, drop this.
-			fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
+			fubar_log:debug(?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
 			noreply(State)
 	end;
 handle_info(Info=#mqtt_publish{message_id=MessageId},
@@ -313,7 +318,7 @@ handle_info(#mqtt_puback{message_id=MessageId}, State=#?MODULE{name=ClientId}) -
 			fubar_log:trace(ClientId, Fubar),
 			noreply(State#?MODULE{retry_pool=Pool});
 		false ->
-			fubar_log:log(warning, ?MODULE, [ClientId, "too late puback for", MessageId]),
+			fubar_log:warning(?MODULE, [ClientId, "too late puback for", MessageId]),
 			noreply(State)
 	end;
 handle_info(#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{name=ClientId, client=Client}) ->
@@ -329,13 +334,13 @@ handle_info(#mqtt_pubrec{message_id=MessageId}, State=#?MODULE{name=ClientId, cl
 			{ok, Timer1} = timer:send_after(#?MODULE.retry_after*#?MODULE.max_retries, {retry, MessageId}),
 			noreply(State#?MODULE{retry_pool=[{MessageId, Fubar1, #?MODULE.max_retries, Timer1} | Pool]});
 		false ->
-			fubar_log:log(warning, ?MODULE, [ClientId, "too late pubrec for", MessageId]),
+			fubar_log:warning(?MODULE, [ClientId, "too late pubrec for", MessageId]),
 			noreply(State)
 	end;
 handle_info(#mqtt_pubrel{message_id=MessageId}, State=#?MODULE{name=ClientId}) ->
 	case lists:keyfind(MessageId, 1, State#?MODULE.transactions) of
 		false ->
-			fubar_log:log(warning, ?MODULE, [ClientId, "too late pubrel for", MessageId]),
+			fubar_log:warning(?MODULE, [ClientId, "too late pubrel for", MessageId]),
 			noreply(State);
 		{MessageId, Worker, _} ->
 			Worker ! release,
@@ -350,13 +355,13 @@ handle_info(#mqtt_pubcomp{message_id=MessageId}, State=#?MODULE{name=ClientId}) 
 			fubar_log:trace({ClientId, "PUBCOMP"}, Fubar),
 			noreply(State#?MODULE{retry_pool=Pool});
 		false ->
-			fubar_log:log(warning, ?MODULE, [ClientId, "too late pubcomp for", MessageId]),
+			fubar_log:warning(?MODULE, [ClientId, "too late pubcomp for", MessageId]),
 			noreply(State)
 	end;
 handle_info(#mqtt_subscribe{message_id=MessageId, dup=true}, State) ->
 	% Subscribe is performed synchronously.
 	% Just drop duplicate requests.
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
 	noreply(State);
 handle_info(Info=#mqtt_subscribe{message_id=MessageId},
 			State=#?MODULE{name=ClientId, transaction_timeout=Timeout, trace=Trace}) ->
@@ -373,7 +378,7 @@ handle_info(Info=#mqtt_subscribe{message_id=MessageId},
 handle_info(#mqtt_unsubscribe{message_id=MessageId, dup=true}, State) ->
 	% Unsubscribe is performed synchronously.
 	% Just drop duplicate requests.
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "dropping duplicate", MessageId]),
 	noreply(State);
 handle_info(Info=#mqtt_unsubscribe{message_id=MessageId, topics=Topics},
 			State=#?MODULE{name=ClientId, transaction_timeout=Timeout, trace=Trace}) ->
@@ -387,7 +392,7 @@ handle_info(Info=#mqtt_unsubscribe{message_id=MessageId, topics=Topics},
 		end,
 	noreply(State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, Topics)});
 handle_info({'EXIT', Client, Reason}, State=#?MODULE{client=Client}) ->
-	fubar_log:log(debug, ?MODULE, [State#?MODULE.name, "client down", Client, Reason]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "client down", Client, Reason]),
 	case State#?MODULE.clean of
 		true ->
 			{stop, normal, State#?MODULE{client=undefined}};
@@ -398,34 +403,34 @@ handle_info({'EXIT', Worker, normal}, State=#?MODULE{name=ClientId}) ->
 	% Likely to be a transaction completion signal.
 	case lists:keytake(Worker, 2, State#?MODULE.transactions) of
 		{value, {MessageId, Worker, Complete}, Rest} ->
-			fubar_log:log(debug, ?MODULE, [ClientId, "transaction complete", MessageId]),
+			fubar_log:debug(?MODULE, [ClientId, "transaction complete", MessageId]),
 			case Complete of
 				undefined -> ok;
 				_ -> State#?MODULE.client ! Complete
 			end,
 			noreply(State#?MODULE{transactions=Rest});
 		false ->
-			fubar_log:log(noise, ?MODULE, [ClientId, "unknown exit detected", Worker]),
+			fubar_log:debug(?MODULE, [ClientId, "unknown exit detected", Worker]),
 			noreply(State)
 	end;
 handle_info({'EXIT', Worker, Reason}, State=#?MODULE{name=ClientId}) ->
 	% Likely to be a transaction failure signal.
 	case lists:keytake(Worker, 2, State#?MODULE.transactions) of
 		{value, {MessageId, Worker, _}, Rest} ->
-			fubar_log:log(warning, ?MODULE, [ClientId, "transaction failure", MessageId, Reason]),
+			fubar_log:error(?MODULE, [ClientId, "transaction failure", MessageId, Reason]),
 			noreply(State#?MODULE{transactions=Rest});
 		false ->
-			fubar_log:log(warning, ?MODULE, [ClientId, "unknown exit detected", Worker, Reason]),
+			fubar_log:error(?MODULE, [ClientId, "unknown exit detected", Worker, Reason]),
 			noreply(State)
 	end;
 
 %% Fallback
 handle_info(Info, State) ->
-	fubar_log:log(noise, ?MODULE, [State#?MODULE.name, "unknown info", Info]),
+	fubar_log:debug(?MODULE, [State#?MODULE.name, "unknown info", Info]),
 	noreply(State).
 
 terminate(Reason, State=#?MODULE{name=ClientId, transaction_timeout=Timeout, trace=Trace}) ->
-	fubar_log:log(resource, ?MODULE, [ClientId, terminate, Reason]),
+	fubar_log:resource(?MODULE, [ClientId, terminate, Reason]),
 	MessageId = State#?MODULE.message_id rem 16#ffff + 1,
 	{Topics, _} = lists:unzip(State#?MODULE.subscriptions),
 	do_transaction(ClientId, mqtt:unsubscribe([{message_id, MessageId}, {topics, Topics}]), Timeout, Trace),
@@ -450,10 +455,10 @@ handle_alert(Session, false) ->
 	gen_server:cast(Session, {alert, false}).
 
 transaction_loop(ClientId, Message, Timeout, Trace) ->
-	fubar_log:log(debug, ?MODULE, [ClientId, "transaction open", mqtt:message_id(Message)]),
+	fubar_log:debug(?MODULE, [ClientId, "transaction open", mqtt:message_id(Message)]),
 	receive
 		release ->
-			fubar_log:log(debug, ?MODULE, [ClientId, "transaction released", mqtt:message_id(Message)]),
+			fubar_log:debug(?MODULE, [ClientId, "transaction released", mqtt:message_id(Message)]),
 			% Async transaction is enough even if the transaction itself should be sync.
 			do_transaction(ClientId, Message, Trace)
 		after Timeout ->

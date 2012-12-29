@@ -32,7 +32,7 @@
          {fubar_log, [{dir, "priv/log"},
                       {max_bytes, 10485760},
                       {max_files, 10},
-                      {interval, 100},
+                      {interval, 10},
                       % {classes, [{access, "fubar"}, {packet, none},
                       %            {protocol, none}, {resource, none},
                       %            {debug, none}, {info, none}, {warning, "fubar"},

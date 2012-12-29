@@ -13,7 +13,8 @@
 %% Exports
 %%
 -export([start_link/0,		% Start log manager
-		 access/2, packet/2, protocol/2, resource/2, debug/2, info/2, warning/2, error/2, trace/2,	% Per class logging
+		 access/2, packet/2, protocol/2, resource/2,
+		 debug/2, info/2, warning/2, error/2, trace/2,	% Per class logging
 		 log/3,				% Generic logging
 		 dump/0, dump/2,	% Dump logs to text
 		 open/1, close/1,	% Open/close logs
@@ -256,11 +257,11 @@ handle_call({interval, T}, _, State=#?MODULE{interval=_}) ->
 handle_call(state, _, State=#?MODULE{interval=T}) ->
 	{reply, State, State, T};
 handle_call(Request, From, State) ->
-	log(debug, ?MODULE, ["unknwon call", Request, From]),
+	debug(?MODULE, ["unknwon call", Request, From]),
 	{reply, {error, unknown}, State}.
 
 handle_cast(Message, State) ->
-	log(debug, ?MODULE, ["unknown cast", Message]),
+	debug(?MODULE, ["unknown cast", Message]),
 	{noreply, State}.
 
 handle_info(timeout, State) ->
@@ -276,7 +277,7 @@ handle_info(timeout, State) ->
 	Classes = lists:foldl(F, [], State#?MODULE.classes),
 	{noreply, State#?MODULE{classes=Classes}, State#?MODULE.interval};
 handle_info(Info, State) ->
-	log(debug, ?MODULE, ["unknown info", Info]),
+	debug(?MODULE, ["unknown info", Info]),
 	{noreply, State}.
 
 terminate(Reason, State) ->
@@ -344,10 +345,10 @@ update_datelog(Io, Log, [_ | Rest]) ->
 	update_datelog(Io, Log, Rest).
 
 print_log(Io, Log, [Date, Time, Node, Pid, Tag, Term]) ->
-	catch io:format(Io, "~-10.8s ~s ~s ~p ~p ~p ~1000p~n",
+	catch io:format(Io, "~-8.8s ~s ~s ~p ~p ~p ~1000p~n",
 					[Log, Date, Time, Node, Pid, Tag, Term]);
 print_log(Io, Log, Term) ->
-	catch io:format(Io, "~-10.8s ~1000p~n", [Log, Term]).
+	catch io:format(Io, "~-8.8s ~1000p~n", [Log, Term]).
 
 dump(Dir, Class, Filename) ->
 	Path = filename:join(Dir, io_lib:format("~s", [Class])),

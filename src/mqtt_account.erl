@@ -66,12 +66,16 @@ verify(Username, Password) ->
 %% @doc Update account.
 -spec update(binary(), binary()) -> ok | {aborted, reason()}.
 update(Username, Password) ->
-	catch mnesia:dirty_write(#?MODULE{username=Username, password=Password}).
+	Result = mnesia:dirty_write(#?MODULE{username=Username, password=Password}),
+	fubar_log:info(?MODULE, [update, Username, Result]),
+	Result.
 
 %% @doc Delete account.
 -spec delete(binary()) -> ok | {aborted, reason()}.
 delete(Username) ->
-	catch mnesia:dirty_delete(?MODULE, Username).
+	Result = mnesia:dirty_delete(?MODULE, Username),
+	fubar_log:info(?MODULE, [delete, Username, Result]),
+	Result.
 
 %%
 %% Unit Tests

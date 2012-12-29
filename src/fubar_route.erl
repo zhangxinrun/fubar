@@ -63,8 +63,7 @@ resolve(Name) ->
 				true ->
 					{ok, {Addr, Module}};
 				_ ->
-					easy_write(Route#?MODULE{addr=undefined}),
-					{ok, {undefined, Module}}
+					{catch mnesia:dirty_write(Route#?MODULE{addr=undefined}), {undefined, Module}}
 			end;
 		[] ->
 			{error, not_found};
@@ -95,20 +94,22 @@ up(Name, Module) ->
 	Pid = self(),
 	Route = #?MODULE{name=Name, addr=Pid, module=Module},
 	case catch mnesia:dirty_read(?MODULE, Name) of
-		[#?MODULE{name=Name, addr=Pid}] ->
+		[#?MODULE{name=Name, addr=Pid, module=Module}] ->
 			% Ignore duplicate up call.
+			fubar_log:warning(?MODULE, ["duplicate up", Name, Pid, Module]),
 			ok;
 		[#?MODULE{name=Name, addr=undefined, module=Module}] ->
-			easy_write(Route);
+			catch mnesia:dirty_write(Route);
 		[#?MODULE{name=Name, addr=Addr, module=Module}] ->
 			% Oust old one.
+			fubar_log:warning(?MODULE, ["conflict up", Name, Pid, Addr, Module]),
 			exit(Addr, kill),
-			easy_write(Route);
+			catch mnesia:dirty_write(Route);
 		[#?MODULE{name=Name}] ->
 			% Occupied by different module.
 			{error, collision};
 		[] ->
-			easy_write(Route);
+			catch mnesia:dirty_write(Route);
 		Error ->
 			{error, Error}
 	end.
@@ -117,9 +118,13 @@ up(Name, Module) ->
 -spec down(term()) -> ok | {error, reason()}.
 down(Name) ->
 	case catch mnesia:dirty_read(?MODULE, Name) of
-		[Route] -> easy_write(Route#?MODULE{addr=undefined});
-		[] -> {error, not_found};
-		Error -> {error, Error}
+		[Route] ->
+			catch mnesia:dirty_write(Route#?MODULE{addr=undefined});
+		[] ->
+			fubar_log:warning(?MODULE, ["unknown down", Name]),
+			{error, not_found};
+		Error ->
+			{error, Error}
 	end.
 
 %% @doc Delete route.
@@ -130,12 +135,6 @@ clean(Name) ->
 %%
 %% Local
 %%		
-easy_write(Record) ->
-	case catch mnesia:dirty_write(Record) of
-		{atomic, ok} -> ok;
-		Error -> {error, Error}
-	end.
-
 check_process(undefined) ->
 	false;
 check_process(Pid) ->

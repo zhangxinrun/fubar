@@ -144,8 +144,7 @@ handle_call(get_vm_memory_high_watermark, _From, State) ->
 
 handle_call({set_vm_memory_high_watermark, MemFraction}, _From, State) ->
     MemLimit = get_mem_limit(MemFraction, State#state.total_memory),
-    error_logger:info_msg("Memory high watermark changed to ~p, ~p bytes.~n",
-                          [MemFraction, MemLimit]),
+	fubar_log:info(?MODULE, ["memory high watermark changed", MemFraction, MemLimit]),
     {reply, ok, State#state{memory_limit = MemLimit}};
 
 handle_call(get_vm_memory_low_watermark, _From, State) ->
@@ -153,8 +152,7 @@ handle_call(get_vm_memory_low_watermark, _From, State) ->
 
 handle_call({set_vm_memory_low_watermark, MemFraction}, _From, State) ->
     MemSafe = get_mem_limit(MemFraction, State#state.total_memory),
-    error_logger:info_msg("Memory low watermark changed to ~p, ~p bytes.~n",
-                          [MemFraction, MemSafe]),
+	fubar_log:info(?MODULE, ["memory low watermark changed", MemFraction, MemSafe]),
     {reply, ok, State#state{memory_safe = MemSafe}};
 
 handle_call(get_check_interval, _From, State) ->
@@ -208,9 +206,7 @@ internal_update(State = #state { memory_limit = MemLimit,
     State #state {alarmed = NewAlarmed}.
 
 emit_update_info(State, MemUsed, MemLimit) ->
-    error_logger:info_msg(
-      "vm_memory_high_watermark ~p. Memory used:~p allowed:~p~n",
-      [State, MemUsed, MemLimit]).
+	fubar_log:warning(?MODULE, ["memory high watermark", State, MemUsed, MemLimit]).
 
 start_timer(Timeout) ->
     {ok, TRef} = timer:apply_interval(Timeout, ?MODULE, update, []),

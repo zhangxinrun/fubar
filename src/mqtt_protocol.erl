@@ -100,10 +100,9 @@ init(State=#?MODULE{host=Host, port=Port, transport=Transport,
 			NewState = State#?MODULE{socket=Socket, socket_options=NewOptions},
 			case Socket of
 				{sslsocket, _, _} ->
-					?DEBUG(ssl:connection_info(Socket)),
+					fubar_log:debug(?MODULE, ssl:connection_info(Socket)),
 					case ssl:peercert(Socket) of
 						{ok, _} ->
-							?DEBUG("ssl cert ok"),
 							client_init(NewState);
 						Error ->
 							{stop, Error}
@@ -121,19 +120,19 @@ init(State=#?MODULE{transport=Transport, socket=Socket}) ->
 	{ok, {PeerAddr, PeerPort}} = Transport:peername(Socket),
 	case State#?MODULE.acl of
 		undefined ->
-			fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
+			fubar_log:access(?MODULE, ["connection from", PeerAddr, PeerPort]),
 			server_init(State);
 		Module ->
 			case Module:verify(PeerAddr) of
 				ok ->
-					fubar_log:log(access, ?MODULE, ["privileged connection from", PeerAddr, PeerPort]),
+					fubar_log:access(?MODULE, ["acl pass from", PeerAddr, PeerPort]),
 					server_init(State#?MODULE{socket_options=State#?MODULE.acl_socket_options,
 											  context=[{auth, undefined}]});
 				{error, not_found} ->
-					fubar_log:log(access, ?MODULE, ["connection from", PeerAddr, PeerPort]),
+					fubar_log:access(?MODULE, ["connection from", PeerAddr, PeerPort]),
 					server_init(State);
 				{error, forbidden} ->
-					fubar_log:log(warning, ?MODULE, ["forbidden connection from", PeerAddr, PeerPort]),
+					fubar_log:access(?MODULE, ["acl block from", PeerAddr, PeerPort]),
 					Transport:close(Socket),
 					{ok, State#?MODULE{socket=undefined, timeout=0}, 0}
 			end
@@ -160,20 +159,19 @@ client_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Op
 server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Options}) ->
 	case Socket of
 		{sslsocket, _, _} ->
-			fubar_log:log(debug, ?MODULE, [ssl, ssl:connection_info(Socket)]),
+			fubar_log:debug(?MODULE, [ssl, ssl:connection_info(Socket)]),
 			NewOptions = lists:foldl(fun(Key, Acc) ->
 											 proplists:delete(Key, Acc)
 									 end, Options, ssl_options()),
 			NewState = State#?MODULE{socket_options=NewOptions},
 			case ssl:peercert(Socket) of
 				{ok, _} ->
-					fubar_log:log(debug, ?MODULE, "ssl cert ok"),
 					server_init(NewState, ok);
 				Error ->
 					case proplists:get_value(verify, Options) of
 						verify_peer ->
 							% The client is not certified and rejected.
-							fubar_log:log(warning, ?MODULE, ["ssl cert not ok", Error]),
+							fubar_log:access(?MODULE, ["ssl cert not ok", Error]),
 							Transport:close(Socket),
 							{ok, NewState#?MODULE{socket=undefined, timeout=0}, 0};
 						_ ->
@@ -190,16 +188,16 @@ server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Op
 	case Dispatch:init(Context) of
 		{reply, Reply, NewContext, Timeout} ->
 			Data = format(Reply),
-			fubar_log:log(packet, ?MODULE, ["sending", Data]),
+			fubar_log:packet(?MODULE, ["sending", Data]),
 			case catch Transport:send(Socket, Data) of
 				ok ->
 					Transport:setopts(Socket, Options ++ [{active, once}]),
 					{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
 				{error, Reason} ->
-					fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
+					fubar_log:warning(?MODULE, ["socket failure", Reason]),
 					{stop, normal};
 				Exit ->
-					fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
+					fubar_log:warning(?MODULE, ["socket failure", Exit]),
 					{stop, normal}
 			end;
 		{reply_later, Reply, NewContext, Timeout} ->
@@ -209,14 +207,14 @@ server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Op
 		{noreply, NewContext, Timeout} ->
 			Transport:setopts(Socket, Options ++ [{active, once}]),
 			{ok, State#?MODULE{context=NewContext, timeout=Timeout}, Timeout};
-		{error, Reason} ->
-			fubar_log:log(warning, ?MODULE, ["dispatch init failure", Reason]),
+		{stop, Reason} ->
+			fubar_log:debug(?MODULE, ["dispatch init failure", Reason]),
 			{stop, normal}
 	end.
 
 %% Fallback
 handle_call(Request, From, State=#?MODULE{timeout=Timeout}) ->
-	fubar_log:log(noise, ?MODULE, ["unknown call", Request, From]),
+	fubar_log:debug(?MODULE, ["unknown call", Request, From]),
 	{reply, {error, unknown}, State, Timeout}.
 
 %% Async administrative commands.
@@ -229,10 +227,10 @@ handle_cast({send, Message}, State=#?MODULE{transport=Transport, socket=Socket,
 		ok ->
 			{noreply, State, Timeout};
 		{error, Reason} ->
-			fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
+			fubar_log:warning(?MODULE, ["socket failure", Reason]),
 			{stop, Dispatch:terminate(Context), State#?MODULE{socket=undefined}};
 		Exit ->
-			fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
+			fubar_log:warning(?MODULE, ["socket failure", Exit]),
 			{stop, Dispatch:terminate(Context), State#?MODULE{socket=undefined}}
 	end;
 handle_cast(stop, State) ->
@@ -257,10 +255,8 @@ handle_info({setopts, Options}, State=#?MODULE{transport=Transport, socket=Socke
 handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Socket, buffer=Buffer,
 												dispatch=Dispatch, context=Context, timeout=Timeout}) ->
 	case Data of
-		<<>> ->
-			ok;
-		_ ->
-			fubar_log:log(packet, ?MODULE, ["received", Data])
+		<<>> -> ok;
+		_ -> fubar_log:packet(?MODULE, ["received", Data])
 	end,
 	% Append the packet at the end of the buffer and start parsing.
 	case parse(State#?MODULE{buffer= <<Buffer/binary, Data/binary>>}) of
@@ -270,17 +266,17 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			case Dispatch:handle_message(Message, Context) of
 				{reply, Reply, NewContext, NewTimeout} ->
 					Data1 = format(Reply),
-					fubar_log:log(packet, ?MODULE, ["sending", Data1]),
+					fubar_log:packet(?MODULE, ["sending", Data1]),
 					case catch Transport:send(Socket, Data1) of
 						ok ->
 							% Simulate new tcp data to trigger next parsing schedule.
 							self() ! {tcp, Socket, <<>>},
 							{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 						{error, Reason} ->
-							fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
+							fubar_log:warning(?MODULE, ["socket failure", Reason]),
 							{stop, Dispatch:terminate(NewContext), State#?MODULE{socket=undefined}};
 						Exit ->
-							fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
+							fubar_log:warning(?MODULE, ["socket failure", Exit]),
 							{stop, Dispatch:terminate(NewContext), State#?MODULE{socket=undefined}}
 					end;
 				{reply_later, Reply, NewContext, NewTimeout} ->
@@ -291,7 +287,7 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 					self() ! {tcp, Socket, <<>>},
 					{noreply, NewState#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 				{stop, Reason, NewContext} ->
-					fubar_log:log(debug, ?MODULE, ["dispatch issued stop", Reason]),
+					fubar_log:debug(?MODULE, ["dispatch issued stop", Reason]),
 					{stop, Dispatch:terminate(NewContext), NewState#?MODULE{context=NewContext}}
 			end;
 		{more, NewState} ->
@@ -299,7 +295,7 @@ handle_info({tcp, Socket, Data}, State=#?MODULE{transport=Transport, socket=Sock
 			Transport:setopts(Socket, [{active, once}]),
 			{noreply, NewState, Timeout};
 		{error, Reason, NewState} ->
-			fubar_log:log(warning, ?MODULE, ["parse error", Reason]),
+			fubar_log:warning(?MODULE, ["parse error", Reason]),
 			{stop, Dispatch:terminate(Context), NewState}
 	end;
 handle_info({ssl, Socket, Data}, State) ->
@@ -317,15 +313,15 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 	case Dispatch:handle_event(Info, Context) of
 		{reply, Reply, NewContext, NewTimeout} ->
 			Data = format(Reply),
-			fubar_log:log(packet, ?MODULE, ["sending", Data]),
+			fubar_log:packet(?MODULE, ["sending", Data]),
 			case catch Transport:send(Socket, Data) of
 				ok ->
 					{noreply, State#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 				{error, Reason} ->
-					fubar_log:log(warning, ?MODULE, ["socket failure", Reason]),
+					fubar_log:warning(?MODULE, ["socket failure", Reason]),
 					{stop, normal, State#?MODULE{socket=undefined}};
 				Exit ->
-					fubar_log:log(warning, ?MODULE, ["socket failure", Exit]),
+					fubar_log:warning(?MODULE, ["socket failure", Exit]),
 					{stop, Dispatch:terminate(NewContext), State#?MODULE{socket=undefined}}
 			end;
 		{reply_later, Reply, NewContext, NewTimeout} ->
@@ -334,7 +330,7 @@ handle_info(Info, State=#?MODULE{transport=Transport, socket=Socket,
 		{noreply, NewContext, NewTimeout} ->
 			{noreply, State#?MODULE{context=NewContext, timeout=NewTimeout}, NewTimeout};
 		{stop, Reason, NewContext} ->
-			fubar_log:log(debug, ?MODULE, ["dispatch issued stop", Reason]),
+			fubar_log:debug(?MODULE, ["dispatch issued stop", Reason]),
 			{stop, Dispatch:terminate(NewContext), State#?MODULE{context=NewContext}}
 	end.
 
