@@ -94,6 +94,8 @@ init(State=#?MODULE{host=Host, port=Port, transport=Transport,
 					socket=undefined, socket_options=Options}) ->
 	case catch Transport:connect(Host, Port, Options) of
 		{ok, Socket} ->
+			{ok, {SockAddr, SockPort}} = Transport:sockname(Socket),
+			fubar_log:access(?MODULE, ["connection from", SockAddr, SockPort]),
 			NewOptions = lists:foldl(fun(Key, Acc) ->
 											 proplists:delete(Key, Acc)
 									 end, Options, ssl_options()),
@@ -118,21 +120,20 @@ init(State=#?MODULE{host=Host, port=Port, transport=Transport,
 init(State=#?MODULE{transport=Transport, socket=Socket}) ->
 	% Leave access log.
 	{ok, {PeerAddr, PeerPort}} = Transport:peername(Socket),
+	fubar_log:access(?MODULE, ["connection from", PeerAddr, PeerPort]),
 	case State#?MODULE.acl of
 		undefined ->
-			fubar_log:access(?MODULE, ["connection from", PeerAddr, PeerPort]),
 			server_init(State);
 		Module ->
 			case Module:verify(PeerAddr) of
 				ok ->
-					fubar_log:access(?MODULE, ["acl pass from", PeerAddr, PeerPort]),
+					fubar_log:access(?MODULE, ["acl pass", PeerAddr]),
 					server_init(State#?MODULE{socket_options=State#?MODULE.acl_socket_options,
 											  context=[{auth, undefined}]});
 				{error, not_found} ->
-					fubar_log:access(?MODULE, ["connection from", PeerAddr, PeerPort]),
 					server_init(State);
 				{error, forbidden} ->
-					fubar_log:access(?MODULE, ["acl block from", PeerAddr, PeerPort]),
+					fubar_log:access(?MODULE, ["acl block", PeerAddr]),
 					Transport:close(Socket),
 					{ok, State#?MODULE{socket=undefined, timeout=0}, 0}
 			end

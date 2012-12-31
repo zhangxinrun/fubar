@@ -303,7 +303,7 @@ open(Class, Dir, L, N) ->
 				  ?INFO(["disk_log already exists, applying previous size"]),
 				  infinity
 		  end,
-   case disk_log:open([{name, Class}, {file, File}, {type, wrap},
+   case disk_log:open([{name, Class}, {file, File}, {type, wrap}, {repair, truncate},
 					   {size, Size}, {distributed, [node()]}]) of
 	   {error, Reason} ->
 		   {error, Reason};
