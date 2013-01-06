@@ -19,9 +19,12 @@
 %% Exports
 %%
 -export([start/1,	% start a session without binding
+		 stop/1,	% stop a session
 		 bind/2,	% find or start a session and bind with calling process
-		 clean/1,	% set clean session flag, the session will terminate on unbind
+		 clean/1,	% unsubscribe all subscriptions
 		 setopts/2,	% set socket options to override default
+		 max_age/1,	% get max age of the session
+		 max_age/2, % set max age of the session
 		 state/1,	% get session state
 		 trace/2]).	% set trace true/false, fubars created by this session are traced
 
@@ -42,9 +45,11 @@
 %%
 -record(?MODULE, {name :: binary(),	% usually client_id
 				  socket_options :: undefined | proplist(atom(), term()),	% socket options to override.
-				  will :: {binary(), binary(), mqtt_qos(), boolean()},	% {topic, payload, qos, retain}
 				  subscriptions = [] :: [{binary(), mqtt_qos()}],	% [{topic, qos}]
 				  client :: pid(),	% mqtt_server process
+				  will :: {binary(), binary(), mqtt_qos(), boolean()},	% {topic, payload, qos, retain}
+				  timestamp :: {integer(), integer(), integer()}, % timestamp when a client is disconnected.
+				  max_age = 172800000 :: integer(), % max lifetime of offline session. 2 days by default.
 				  transactions = [] :: [{integer(), pid(), mqtt_message()}], % [{message_id, transaction_loop, reply}]
 				  transaction_timeout = 60000 :: timeout(),	% drop transactions not complete in this timeout
 				  message_id = 0 :: integer(),	% last message_id used by this session
@@ -53,7 +58,6 @@
 				  retry_pool = [] :: [{integer(), #fubar{}, integer(), term()}],	% retry pool for downlink transaction
 				  max_retries = 5 :: integer(),	% drop downlink transactions after retry
 				  retry_after = 10000 :: timeout(),	% downlink transactions retry policy
-				  clean = false :: boolean(),	% terminates on client down when this flag is set
 				  trace = false :: boolean(),	% sets trace flag on for fubars created by this session
 				  alert = false :: boolean()}).	% runs gc on every reduction when this flag is set
 
@@ -67,6 +71,21 @@
 -spec start(proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
 start(Props) ->
 	gen_server:start(?MODULE, Props, []).
+
+%% @doc Stop a session.
+-spec stop(pid() | term()) -> ok | {error, reason()}.
+stop(Session) when is_pid(Session) ->
+	gen_server:cast(Session, stop);
+stop(Name) ->
+	case fubar_route:resolve(Name) of
+		{ok, {undefined, ?MODULE}} ->
+			% The session is temporarily down.
+			fubar_route:clean(Name);
+		{ok, {Session, ?MODULE}} ->
+			stop(Session);
+		Error ->
+			Error
+	end.
 
 %% @doc Bind a client to existing session or create a new one.
 -spec bind(term(), proplist(atom(), term())) -> {ok, pid()} | {error, reason()}.
@@ -87,10 +106,10 @@ bind(ClientId, Will) ->
 			Error
 	end.
 
-%% @doc Mark a session to clean on client disconnect.
+%% @doc Clean all the subscriptions.
 -spec clean(pid() | binary()) -> ok.
 clean(Session) when is_pid(Session) ->
-	gen_server:call(Session, clean);
+	gen_server:cast(Session, clean);
 clean(Name) ->
 	case fubar_route:resolve(Name) of
 		{ok, {undefined, ?MODULE}} ->
@@ -114,7 +133,35 @@ setopts(Name, Options) ->
 		Error ->
 			Error
 	end.
-	
+
+%% @doc Get max age of the session.
+-spec max_age(pid() | binary()) -> {ok, integer()} | {error, reason()}.
+max_age(Session) when is_pid(Session) ->
+	gen_server:call(Session, max_age);
+max_age(Name) ->
+	case fubar_route:resolve(Name) of
+		{ok, {undefined, ?MODULE}} ->
+			{error, inactive};
+		{ok, {Session, ?MODULE}} ->
+			max_age(Session);
+		Error ->
+			Error
+	end.
+
+%% @doc Set max age of the session.
+-spec max_age(pid() | binary(), integer()) -> ok | {error, reason()}.
+max_age(Session, Value) when is_pid(Session) ->
+	gen_server:call(Session, {max_age, Value});
+max_age(Name, Value) ->
+	case fubar_route:resolve(Name) of
+		{ok, {undefined, ?MODULE}} ->
+			{error, inactive};
+		{ok, {Session, ?MODULE}} ->
+			max_age(Session, Value);
+		Error ->
+			Error
+	end.
+
 %% @doc Get session state.
 -spec state(pid() | binary()) -> #?MODULE{}.
 state(Session) when is_pid(Session) ->
@@ -151,7 +198,7 @@ init(Props) ->
 	case fubar_route:up(State#?MODULE.name, ?MODULE) of
 		ok ->
 			fubar_log:resource(?MODULE, [State#?MODULE.name, init]),
-			{ok, State};
+			{ok, State#?MODULE{timestamp=now()}, State#?MODULE.max_age};
 		Error ->
 			fubar_log:error(?MODULE, [State#?MODULE.name, init, Error]),
 			{stop, Error}
@@ -162,9 +209,10 @@ handle_call(state, _, State) ->
 	reply(State, State);
 
 %% Client bind/clean logic for mqtt_server.
-handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=Buffer}) ->
-	fubar_log:debug(?MODULE, [State#?MODULE.name, "linking", Client]),
-	link(Client),	% to detect client down and to let client crash when this session down
+handle_call({bind, Will}, {Client, _}, State=#?MODULE{name=Name, client=undefined, buffer=Buffer}) ->
+	fubar_log:debug(?MODULE, [Name, "binding", Client]),
+	link(Client),	% To detect client down and to let client crash when this session down
+	% Apply stored socket options to the client.
 	case State#?MODULE.socket_options of
 		undefined -> ok;
 		Options -> Client ! {setopts, Options}
@@ -172,8 +220,9 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=undefined, buffer=B
 	% Now flush buffer.
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
-handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=Buffer}) ->
-	fubar_log:warning(?MODULE, [State#?MODULE.name, "linking", Client, "and killing", OldClient]),
+handle_call({bind, Will}, {Client, _}, State=#?MODULE{name=Name, client=OldClient, buffer=Buffer}) ->
+	% A client attempts to bind when there is already a binding.
+	fubar_log:warning(?MODULE, [Name, "binding", Client, "and killing", OldClient]),
 	catch unlink(OldClient),
 	exit(OldClient, kill),
 	link(Client),
@@ -183,14 +232,17 @@ handle_call({bind, Will}, {Client, _}, State=#?MODULE{client=OldClient, buffer=B
 	end,
 	lists:foreach(fun(Fubar) -> gen_server:cast(self(), Fubar) end, lists:reverse(Buffer)),
 	reply(ok, State#?MODULE{client=Client, will=Will, buffer=[]});
-handle_call(clean, _, State) ->
-	reply(ok, State#?MODULE{clean=true});
 handle_call({setopts, Options}, _, State) ->
+	% Set socket options for clients of this session.
 	case State#?MODULE.client of
 		undefined -> ok;
 		Client -> Client ! {setopts, Options}
 	end,
 	reply(ok, State#?MODULE{socket_options=Options});
+handle_call(max_age, _, State=#?MODULE{max_age=Value}) ->
+	reply({ok, Value}, State);
+handle_call({max_age, Value}, _, State) ->
+	reply(ok, State#?MODULE{max_age=Value});
 handle_call({trace, Value}, _, State) ->
 	reply(ok, State#?MODULE{trace=Value});
 
@@ -199,6 +251,22 @@ handle_call(Request, From, State) ->
 	fubar_log:debug(?MODULE, [State#?MODULE.name, "unknown call", Request, From]),
 	reply(ok, State).
 
+%% Clean session.
+handle_cast(clean, State=#?MODULE{name=Name, transaction_timeout=Timeout, trace=Trace}) ->
+	case State#?MODULE.subscriptions of
+		[] ->
+			noreply(State);
+		Subscriptions ->
+			MessageId = State#?MODULE.message_id rem 16#ffff + 1,
+			{Topics, _} = lists:unzip(Subscriptions),
+			do_transaction(Name, mqtt:unsubscribe([{message_id, MessageId}, {topics, Topics}]), Timeout, Trace),
+			noreply(State#?MODULE{subscriptions=[]})
+	end;
+
+%% Stop.
+handle_cast(stop, State) ->
+	{stop, normal, State};
+
 %% Message delivery logic to the client.
 handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=undefined, buffer=Buffer, buffer_limit=N}) ->
 	% Got a message to deliver to the client.
@@ -206,7 +274,7 @@ handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=undefined, buff
 	fubar_log:trace(ClientId, Fubar),
 	noreply(State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N)});
 handle_cast(Fubar=#fubar{}, State=#?MODULE{name=ClientId, client=Client}) ->
-	% Got a message and the client is alive.
+	% Got a message and the client is online.
 	% Let's send it to the client.
 	fubar_log:trace(ClientId, Fubar),
 	case fubar:get(payload, Fubar) of
@@ -391,14 +459,19 @@ handle_info(Info=#mqtt_unsubscribe{message_id=MessageId, topics=Topics},
 				lists:keydelete(Topic, 1, Subscriptions)
 		end,
 	noreply(State#?MODULE{subscriptions=lists:foldl(F, State#?MODULE.subscriptions, Topics)});
-handle_info({'EXIT', Client, Reason}, State=#?MODULE{client=Client}) ->
+handle_info({'EXIT', Client, Reason}, State=#?MODULE{name=Name, client=Client,
+													 message_id=MessageId, trace=Trace}) ->
 	fubar_log:debug(?MODULE, [State#?MODULE.name, "client down", Client, Reason]),
-	case State#?MODULE.clean of
-		true ->
-			{stop, normal, State#?MODULE{client=undefined}};
-		_ ->
-			noreply(State#?MODULE{client=undefined})
-	end;
+	case State#?MODULE.will of
+		undefined ->
+			ok;
+		{WillTopic, WillMessage, WillQoS, WillRetain} ->
+			NewMessageId = MessageId rem 16#ffff + 1,
+			Message = mqtt:publish([{message_id, NewMessageId}, {topic, WillTopic},
+									{qos, WillQoS}, {retain, WillRetain}, {payload, WillMessage}]),
+			do_transaction(Name, Message, Trace)
+	end,
+	noreply(State#?MODULE{client=undefined, timestamp=now()});
 handle_info({'EXIT', Worker, normal}, State=#?MODULE{name=ClientId}) ->
 	% Likely to be a transaction completion signal.
 	case lists:keytake(Worker, 2, State#?MODULE.transactions) of
@@ -410,7 +483,7 @@ handle_info({'EXIT', Worker, normal}, State=#?MODULE{name=ClientId}) ->
 			end,
 			noreply(State#?MODULE{transactions=Rest});
 		false ->
-			fubar_log:debug(?MODULE, [ClientId, "unknown exit detected", Worker]),
+			fubar_log:error(?MODULE, [ClientId, "unknown exit detected", Worker]),
 			noreply(State)
 	end;
 handle_info({'EXIT', Worker, Reason}, State=#?MODULE{name=ClientId}) ->
@@ -424,26 +497,20 @@ handle_info({'EXIT', Worker, Reason}, State=#?MODULE{name=ClientId}) ->
 			noreply(State)
 	end;
 
+handle_info(timeout, State=#?MODULE{name=Name}) ->
+	% Session timeout by client offline.
+	fubar_log:warning(?MODULE, [Name, "session timeout"]),
+	{stop, normal, State};
+
 %% Fallback
 handle_info(Info, State) ->
 	fubar_log:debug(?MODULE, [State#?MODULE.name, "unknown info", Info]),
 	noreply(State).
 
-terminate(Reason, State=#?MODULE{name=ClientId, transaction_timeout=Timeout, trace=Trace}) ->
-	fubar_log:resource(?MODULE, [ClientId, terminate, Reason]),
-	MessageId = State#?MODULE.message_id rem 16#ffff + 1,
-	{Topics, _} = lists:unzip(State#?MODULE.subscriptions),
-	do_transaction(ClientId, mqtt:unsubscribe([{message_id, MessageId}, {topics, Topics}]), Timeout, Trace),
-	case State#?MODULE.will of
-		undefined ->
-			ok;
-		{WillTopic, WillMessage, WillQoS, WillRetain} ->
-			NewMessageId = MessageId rem 16#ffff + 1,
-			Message = mqtt:publish([{message_id, NewMessageId}, {topic, WillTopic},
-									{qos, WillQoS}, {retain, WillRetain}, {payload, WillMessage}]),
-			do_transaction(ClientId, Message, Trace)
-	end,
-	fubar_route:clean(ClientId).
+terminate(Reason, State=#?MODULE{name=Name}) ->
+	fubar_log:resource(?MODULE, [Name, terminate, Reason]),
+	handle_cast(clean, State),
+	fubar_route:clean(Name).
 
 code_change(OldVsn, State, Extra) ->
 	?WARNING([code_change, OldVsn, State, Extra]),
@@ -470,11 +537,17 @@ transaction_loop(ClientId, Message, Timeout, Trace) ->
 %%
 reply(Reply, State=#?MODULE{alert=true}) ->
 	{reply, Reply, State, hibernate};
+reply(Reply, State=#?MODULE{client=undefined, timestamp=T, max_age=MaxAge}) ->
+	Age = timer:now_diff(now(), T) div 1000,
+	{reply, Reply, State, max(MaxAge-Age, 0)};
 reply(Reply, State) ->
 	{reply, Reply, State}.
 
 noreply(State=#?MODULE{alert=true}) ->
 	{noreply, State, hibernate};
+noreply(State=#?MODULE{client=undefined, timestamp=T, max_age=MaxAge}) ->
+	Age = timer:now_diff(now(), T) div 1000,
+	{noreply, State, max(MaxAge-Age, 0)};
 noreply(State) ->
 	{noreply, State}.
 	

@@ -4,6 +4,7 @@ mqtt_port=1883
 mqtts_port=undefined
 node=fubar
 master=undefined
+cookie=sharedsecretamongnodesofafubarcluster_youneedtochangethisforsecurity
 # ssh_host=localhost
 # ssh_port=22
 
@@ -16,7 +17,8 @@ test: compile
 	mkdir -p priv/data
 	mkdir -p priv/log/$(node)
 	erl -pa ebin deps/*/ebin +A 100 +K true +P 10000000 +W w -boot start_sasl \
-		-sname $(node) -s reloader -s $(APP) -mnesia dir '"priv/data/$(node)"' \
+		-sname $(node) -setcookie $(cookie) -s reloader -s $(APP) \
+		-mnesia dir '"priv/data/$(node)"' \
 		-env MQTT_PORT $(mqtt_port) -env MQTTS_PORT $(mqtts_port) -env FUBAR_MASTER $(master)
 
 # Start the program in production mode.
@@ -29,7 +31,8 @@ run: compile
 	export RUN_ERL_LOG_GENERATIONS RUN_ERL_LOG_MAXSIZE
 	run_erl -daemon /tmp/$(node)/ $(CURDIR)/priv/log/$(node) \
 		"erl -pa $(CURDIR)/ebin $(CURDIR)/deps/*/ebin +A 100 +K true +P 10000000 +W w -boot start_sasl \
-			-sname $(node) -s $(APP) -mnesia dir '\"$(CURDIR)/priv/data/$(node)\"' \
+			-sname $(node) -setcookie $(cookie) -s $(APP) \
+			-mnesia dir '\"$(CURDIR)/priv/data/$(node)\"' \
 			-env MQTT_PORT $(mqtt_port) -env MQTTS_PORT $(mqtts_port) -env FUBAR_MASTER $(master)"
 
 # Debug running program in production mode.
@@ -49,12 +52,13 @@ monitor: compile
 	RUN_ERL_LOG_GENERATIONS=10
 	RUN_ERL_LOG_MAXSIZE=10485760
 	export RUN_ERL_LOG_GENERATIONS RUN_ERL_LOG_MAXSIZE
-	run_erl -daemon /tmp/$(node)_monitor/ $(CURDIR)/priv/log/$(node)_monitor \
+	run_erl -daemon /tmp/$(node)_mon/ $(CURDIR)/priv/log/$(node)_mon \
 		"erl -pa $(CURDIR)/ebin $(CURDIR)/deps/*/ebin +A 100 +K true +P 10000000 +W w -boot start_sasl \
-			-sname $(node)_monitor -s $(APP) -mnesia dir '\"$(CURDIR)/priv/data/$(node)_monitor\"' \
+			-sname $(node)_mon -setcookie $(cookie) -s $(APP) \
+			-mnesia dir '\"$(CURDIR)/priv/data/$(node)_monitor\"' \
 			-env MQTT_PORT undefined -env MQTTS_PORT undefined -env FUBAR_MASTER $(master)"
 
-# Make a textual log snapshot.
+# Make a textual SASL log snapshot.
 dump:
 	priv/script/dump-log.escript $(node)
 

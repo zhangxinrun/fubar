@@ -30,7 +30,6 @@
 %%
 -record(?MODULE, {client_id :: binary(),
 				  auth :: module(),
-				  clean_session = false :: boolean(),
 				  session :: pid(),
 				  valid_keep_alive :: undefined | {integer(), integer()},
 				  timeout = 10000 :: timeout(),
@@ -142,12 +141,7 @@ handle_message(Message=#mqtt_unsubscribe{}, State=#?MODULE{session=Session}) ->
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
 	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
-	case State#?MODULE.clean_session of
-		true ->
-			mqtt_session:clean(Session);
-		_ ->
-			ok
-	end,
+	mqtt_session:stop(Session),
 	{stop, normal, State#?MODULE{timestamp=now()}};
 
 %% Fallback
@@ -234,15 +228,17 @@ bind_session(Message=#mqtt_connect{client_id=ClientId}, State) ->
 						% MQTT extension: server may suggest different keep-alive.
 						_ -> mqtt:connack([{code, accepted}, {extra, <<KeepAlive:16/big-unsigned>>}])
 					end,
+			case Message#mqtt_connect.clean_session of
+				true -> mqtt_session:clean(Session);
+				_ -> ok
+			end,
 			{reply, Reply,
-			 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
-						   session=Session, timeout=Timeout, timestamp=now()}, Timeout};
+			 State#?MODULE{client_id=ClientId, session=Session, timeout=Timeout, timestamp=now()}, Timeout};
 		Error ->
 			fubar_log:error(?MODULE, [ClientId, "session bind failure", Error]),
 			% Timeout immediately to close just after reply.
 			{reply, mqtt:connack([{code, unavailable}]),
-			 State#?MODULE{client_id=ClientId, clean_session=Message#mqtt_connect.clean_session,
-						   timestamp=now()}, 0}
+			 State#?MODULE{client_id=ClientId, timestamp=now()}, 0}
 	end.
 
 determine_keep_alive(Suggested, {Min, _}) when Suggested < Min ->
