@@ -40,7 +40,9 @@
 -record(?MODULE, {dir = "priv/log" :: string(),
 				  max_bytes = 1048576 :: integer(),
 				  max_files = 10 :: integer(),
-				  classes = [] :: [{atom(), term(), none | standard_io | pid() | {string(), string(), pid()}}],
+				  classes = [] :: [{atom(), term(),
+									none | standard_io | pid() |
+									{string(), string(), string(), integer(), integer(), integer(), pid()}}],
 				  interval = 100 :: timeout()}).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -188,8 +190,7 @@ init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=List, interval=T}
 	Classes = lists:foldl(fun({Class, Current}, Acc) ->
 								  case lists:keyfind(Class, 1, List) of
 									  {Class, Out} when is_list(Out) ->
-										  Prefix = filename:join(Dir, Out),
-										  Acc++[{Class, Current, {Prefix, undefined, undefined}}];
+										  Acc++[{Class, Current, {Dir, Out, undefined, 0, 0, L, undefined}}];
 									  {Class, Out} ->
 										  Acc++[{Class, Current, Out}];
 									  false ->
@@ -223,16 +224,15 @@ handle_call({close, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
 		false ->
 			{reply, {error, not_found}, State, T}
 	end;
-handle_call({out, Io}, _, State=#?MODULE{classes=OldClasses, interval=T}) ->
+handle_call({out, Io}, _, State=#?MODULE{dir=Dir, max_bytes=L, classes=OldClasses, interval=T}) ->
 	Classes = case Io of
 				  String when is_list(String) ->
-					  Prefix = filename:join(State#?MODULE.dir, String),
-					  [{Class, Current, {Prefix, undefined, undefined}} || {Class, Current, _} <- OldClasses];
+					  [{Class, Current, {Dir, String, undefined, 0, 0, L, undefined}} || {Class, Current, _} <- OldClasses];
 				  _ ->
 					  [{Class, Current, Io} || {Class, Current, _} <- OldClasses]
 			  end,
 	{reply, ok, State#?MODULE{classes=Classes}, T};
-handle_call({out, Class, Io}, _, State=#?MODULE{classes=OldClasses, interval=T}) ->
+handle_call({out, Class, Io}, _, State=#?MODULE{dir=Dir, max_bytes=L, classes=OldClasses, interval=T}) ->
 	case lists:keytake(Class, 1, OldClasses) of
 		{value, {Class, Current, OldIo}, Rest} ->
 			case OldIo of
@@ -243,8 +243,7 @@ handle_call({out, Class, Io}, _, State=#?MODULE{classes=OldClasses, interval=T})
 			end,
 			Classes = case Io of
 						  String when is_list(String) ->
-							  Prefix = filename:join(State#?MODULE.dir, String),
-							  [{Class, Current, {Prefix, undefined, undefined}} | Rest];
+							  [{Class, Current, {Dir, String, undefined, 0, 0, L, undefined}} | Rest];
 						  _ ->
 							  [{Class, Current, Io} | Rest]
 					  end,
@@ -322,8 +321,8 @@ consume_log(Log, Last, Io) ->
 			case Io of
 				none ->
 					{ok, Last, Io};
-				{Prefix, Suffix, File} ->
-					NewIo = update_datelog({Prefix, Suffix, File}, Log, Terms),
+				Redir = {_, _, _, _, _, _, _} -> % redirect to dayfile
+					NewIo = update_datelog(Redir, Log, Terms),
 					consume_log(Log, Current, NewIo);
 				_ ->
 					lists:foreach(fun(Term) -> print_log(Io, Log, Term) end, Terms),
@@ -333,22 +332,36 @@ consume_log(Log, Last, Io) ->
 
 update_datelog(Io, _, []) ->
 	Io;
-update_datelog({Prefix, Suffix, File}, Log, [[Suffix | Term] | Rest]) ->
-	print_log(File, Log, [Suffix | Term]),
-	update_datelog({Prefix, Suffix, File}, Log, Rest);
-update_datelog({Prefix, _Suffix, OldFile}, Log, [[Suffix | Term] | Rest]) ->
+update_datelog({Dir, Prefix, Suffix, N, L, M, OldFile}, Log, Term=[[Suffix | _] | _]) when L > M ->
+	% Current datelog size exceeded maximum.
+	% Open a new one and try again.
 	catch file:close(OldFile),
-	{ok, File} = file:open(Prefix++"_"++Suffix++".log", [append]),
-	print_log(File, Log, [Suffix | Term]),
-	update_datelog({Prefix, Suffix, File}, Log, Rest);
+	Basename = filename:join(Dir, Prefix)++"_"++Suffix++".log",
+	Filename = io_lib:format("~s.~B", [Basename, N+1]),
+	{ok, File} = file:open(Filename, [append]),
+	L1 = filelib:file_size(Filename),
+	update_datelog({Dir, Prefix, Suffix, N+1, L1, M, File}, Log, Term);
+update_datelog({Dir, Prefix, _, 0, _, M, File}, Log, Term=[[Suffix | _] | _]) ->
+	% This is the first datelog attempt.
+	update_datelog({Dir, Prefix, Suffix, 0, M+1, M, File}, Log, Term);
+update_datelog({Dir, Prefix, Suffix, N, L, M, File}, Log, [[Suffix | Term] | Rest]) ->
+	B = print_log(File, Log, [Suffix | Term]),
+	update_datelog({Dir, Prefix, Suffix, N, L+B, M, File}, Log, Rest);
+update_datelog({Dir, Prefix, _, _, _, M, File}, Log, Term=[[Suffix | _] | _]) ->
+	% New suffix, start another datelogging.
+	update_datelog({Dir, Prefix, Suffix, 0, 0, M, File}, Log, Term);
 update_datelog(Io, Log, [_ | Rest]) ->
 	update_datelog(Io, Log, Rest).
 
 print_log(Io, Log, [Date, Time, Node, Pid, Tag, Term]) ->
-	catch io:format(Io, "~-8.8s ~s ~s ~p ~p ~p ~1000p~n",
-					[Log, Date, Time, Node, Pid, Tag, Term]);
+	String = io_lib:format("~-8.8s ~s ~s ~p ~p ~p ~1000p~n",
+						   [Log, Date, Time, Node, Pid, Tag, Term]),
+	catch io:format(Io, "~s", [String]),
+	iolist_size(String);
 print_log(Io, Log, Term) ->
-	catch io:format(Io, "~-8.8s ~1000p~n", [Log, Term]).
+	String = io_lib:format("~-8.8s ~1000p~n", [Log, Term]),
+	catch io:format(Io, "~s", [String]),
+	iolist_size(String).
 
 dump(Dir, Class, Filename) ->
 	Path = filename:join(Dir, io_lib:format("~s", [Class])),
