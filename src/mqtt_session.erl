@@ -318,7 +318,7 @@ handle_info({retry, MessageId}, State=#?MODULE{client=undefined, buffer=Buffer, 
 		{value, {MessageId, Fubar, Retry, _}, Pool} ->
 			case Retry < State#?MODULE.max_retries of
 				true ->
-					noreply(State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N, retry_pool=Pool)});
+					noreply(State#?MODULE{buffer=lists:sublist([Fubar | Buffer], N), retry_pool=Pool});
 				_ ->
 					fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "dropping after retry", Fubar]),
 					noreply(State#?MODULE{retry_pool=Pool})

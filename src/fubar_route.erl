@@ -55,7 +55,7 @@ cluster(_MasterNode) ->
 %% @doc Resovle given name into address.
 -spec resolve(term()) -> {ok, {pid(), module()}} | {error, reason()}.
 resolve(Name) ->
-	case catch mnesia:dirty_read(?MODULE, Name) of
+	case catch mnesia:async_dirty(fun mnesia:dirty_read/2, [?MODULE, Name]) of
 		[#?MODULE{name=Name, addr=undefined, module=Module}] ->
 			{ok, {undefined, Module}};
 		[Route=#?MODULE{name=Name, addr=Addr, module=Module}] ->
@@ -74,7 +74,7 @@ resolve(Name) ->
 %% @doc Ensure given name exists.
 -spec ensure(term(), module()) -> {ok, pid()} | {error, reason()}.
 ensure(Name, Module) ->
-	case catch mnesia:dirty_read(?MODULE, Name) of
+	case catch mnesia:async_dirty(fun mnesia:dirty_read/2, [?MODULE, Name]) of
 		[#?MODULE{name=Name, addr=Addr, module=Module}] ->
 			case check_process(Addr) of
 				true -> {ok, Addr};
@@ -93,7 +93,7 @@ ensure(Name, Module) ->
 up(Name, Module) ->
 	Pid = self(),
 	Route = #?MODULE{name=Name, addr=Pid, module=Module},
-	case catch mnesia:dirty_read(?MODULE, Name) of
+	case catch mnesia:async_dirty(fun mnesia:dirty_read/2, [?MODULE, Name]) of
 		[#?MODULE{name=Name, addr=Pid, module=Module}] ->
 			% Ignore duplicate up call.
 			fubar_log:warning(?MODULE, ["duplicate up", Name, Pid, Module]),
@@ -117,7 +117,7 @@ up(Name, Module) ->
 %% @doc Update route with stale name and address.
 -spec down(term()) -> ok | {error, reason()}.
 down(Name) ->
-	case catch mnesia:dirty_read(?MODULE, Name) of
+	case catch mnesia:async_dirty(fun mnesia:dirty_read/2, [?MODULE, Name]) of
 		[Route] ->
 			catch mnesia:dirty_write(Route#?MODULE{addr=undefined});
 		[] ->

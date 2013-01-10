@@ -47,15 +47,15 @@ client: compile
 # Start a log manager.
 monitor: compile
 	mkdir -p priv/data
-	mkdir -p priv/log/$(node)_monitor
-	mkdir -p /tmp/$(node)_monitor
+	mkdir -p priv/log/$(node)_mon
+	mkdir -p /tmp/$(node)_mon
 	RUN_ERL_LOG_GENERATIONS=10
 	RUN_ERL_LOG_MAXSIZE=10485760
 	export RUN_ERL_LOG_GENERATIONS RUN_ERL_LOG_MAXSIZE
 	run_erl -daemon /tmp/$(node)_mon/ $(CURDIR)/priv/log/$(node)_mon \
 		"erl -pa $(CURDIR)/ebin $(CURDIR)/deps/*/ebin +A 100 +K true +P 10000000 +W w -boot start_sasl \
 			-sname $(node)_mon -setcookie $(cookie) -s $(APP) \
-			-mnesia dir '\"$(CURDIR)/priv/data/$(node)_monitor\"' \
+			-mnesia dir '\"$(CURDIR)/priv/data/$(node)_mon\"' \
 			-env MQTT_PORT undefined -env MQTTS_PORT undefined -env FUBAR_MASTER $(master)"
 
 # Make a textual SASL log snapshot.
