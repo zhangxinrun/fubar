@@ -134,24 +134,24 @@ applications.
 	- none			% No redirect.  Logs are left in the binary files only.
 	- standard_io	% Redirect to tty.
 	- "prefix"		% Redirect to daily log files with the prefix.
-	          		% e.g, "prefix_2012-12-29.log"
+	          		% e.g, "prefix_2012-12-29.log.1"
 	
 	As noted before, disk_log is distributed log.  Common practice to use
 	distributed log in production is to use one node for central log consumer
 	and set all the other nodes as log producer.  To configure your system like
-	this, start a node with 'make monitor' command from a computer.  Then you
-	have a node 'fubar_monitor@host1'.  Now start other nodes with
-	'make run master=fubar_monitor@host1' command from other computers.  You
+	this, start a node with 'make run mqtt=undefined' command from a computer.
+	Then you have a node 'fubar@host1' without a listener.  Now start other
+	nodes with 'make run master=fubar@host1' command from other computers.  You
 	may turn all the log classes off in all the other nodes and control in only
 	one place, the monitor node.
 	
 	You will find following files under the log directory.
 	
-	- 1, 2,..., index	% SASL logs, binary rolling files.
-	- access.*,...		% disk_logs for each class, binary rolling files.
-	- run_erl.log		% Broker start-up linux command (production only).
-	- erlang.log.*		% Erlang shell input/output history (production only).
-	- *_YYYY-MM-DD.log	% Daily logs, text files without size limit.
+	- 1, 2,..., index		% SASL logs, binary rolling files.
+	- access.*,...			% disk_logs for each class, binary rolling files.
+	- run_erl.log			% Broker start-up linux command (production only).
+	- erlang.log.*			% Erlang shell input/output history (production only).
+	- *_YYYY-MM-DD.log.*	% Daily logs, text files without size limit.
 	
 	If you have daily logs in your log directory, you have to delete them
 	regularly.  They are produced if you redirect any disk_log to file by

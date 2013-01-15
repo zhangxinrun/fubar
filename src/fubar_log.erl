@@ -40,6 +40,7 @@
 -record(?MODULE, {dir = "priv/log" :: string(),
 				  max_bytes = 1048576 :: integer(),
 				  max_files = 10 :: integer(),
+				  distributed = true :: boolean(),
 				  classes = [] :: [{atom(), term(),
 									none | standard_io | pid() |
 										{string(), string(), string(), integer(), integer(), pid()}}],
@@ -178,11 +179,12 @@ state() ->
 %%
 %% Callback Functions
 %%
-init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=List, interval=T}) ->
+init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, distributed=Distributed,
+					classes=List, interval=T}) ->
 	?INFO(["log manager started", State]),
 	% Open all the log classes first and close some of them.
 	All = lists:foldl(fun(Class, Acc) ->
-							  case open(Class, Dir, L, N) of
+							  case open(Class, Dir, L, N, Distributed) of
 								  {ok, {Class, Current}} ->
 									  ?INFO(["disk_log open", Class]),
 									  Acc++[{Class, Current}];
@@ -206,7 +208,8 @@ init(State=#?MODULE{dir=Dir, max_bytes=L, max_files=N, classes=List, interval=T}
 	{ok, State#?MODULE{classes=Classes}, T}.
 
 handle_call({open, Class}, _, State=#?MODULE{classes=Classes, interval=T}) ->
-	case open(Class, State#?MODULE.dir, State#?MODULE.max_bytes, State#?MODULE.max_files) of
+	case open(Class, State#?MODULE.dir, State#?MODULE.max_bytes, State#?MODULE.max_files,
+			  State#?MODULE.distributed) of
 		{ok, {Class, Current}} ->
 			?INFO(["disk_log open", Class]),
 			{reply, ok, State#?MODULE{classes=[{Class, Current, none} | Classes]}, T};
@@ -297,7 +300,7 @@ code_change(OldVsn, State, Extra) ->
 %%
 %% Local Functions
 %%
-open(Class, Dir, L, N) ->
+open(Class, Dir, L, N, Distributed) ->
    File = filename:join(Dir, io_lib:format("~s", [Class])),
    Size = case filelib:last_modified(File) of
 			  0 ->
@@ -306,8 +309,12 @@ open(Class, Dir, L, N) ->
 				  ?INFO(["disk_log already exists, applying previous size"]),
 				  infinity
 		  end,
-   case disk_log:open([{name, Class}, {file, File}, {type, wrap}, {repair, truncate},
-					   {size, Size}, {distributed, [node()]}]) of
+   Opt = case Distributed of
+			 true -> [{distributed, [node()]}];
+			 _ -> []
+		 end,
+   case disk_log:open([{name, Class}, {file, File}, {type, wrap},
+					   {repair, truncate}, {size, Size} | Opt]) of
 	   {error, Reason} ->
 		   {error, Reason};
 	   _ ->

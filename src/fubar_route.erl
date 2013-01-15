@@ -121,7 +121,7 @@ down(Name) ->
 		[Route] ->
 			catch mnesia:dirty_write(Route#?MODULE{addr=undefined});
 		[] ->
-			fubar_log:warning(?MODULE, ["unknown down", Name]),
+			fubar_log:error(?MODULE, ["unknown down", Name]),
 			{error, not_found};
 		Error ->
 			{error, Error}

@@ -76,10 +76,11 @@ handle_message(Message=#mqtt_connect{client_id=ClientId, username=undefined},
 			bind_session(Message, State);
 		_ ->
 			% Give another chance to connect with right credential again.
+			fubar_log:warning(?MODULE, [ClientId, "no username"]),
 			{reply, mqtt:connack([{code, unauthorized}]), State, timeout(Timeout, Timestamp)}
 	end;
 handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username},
-			   State=#?MODULE{session=undefined}) ->
+			   State=#?MODULE{session=undefined, timeout=Timeout}) ->
 	fubar_log:protocol(?MODULE, [ClientId, "=>", Message]),
 	case State#?MODULE.auth of
 		undefined ->
@@ -92,12 +93,14 @@ handle_message(Message=#mqtt_connect{client_id=ClientId, username=Username},
 					% Now bind with the session or create a new one.
 					bind_session(Message, State);
 				{error, not_found} ->
+					fubar_log:warning(?MODULE, [ClientId, "wrong username", Username]),
 					{reply, mqtt:connack([{code, id_rejected}]), State#?MODULE{timestamp=now()}, 0};
 				{error, forbidden} ->
+					fubar_log:warning(?MODULE, [ClientId, "wrong password", Username]),
 					{reply, mqtt:connack([{code, forbidden}]), State#?MODULE{timestamp=now()}, 0};
 				Error ->
 					fubar_log:error(?MODULE, ["error in auth module", Auth, Error]),
-					{reply, mqtt:connack([{code, unavailable}]), State#?MODULE{timestamp=now()}, 0}
+					{reply, mqtt:connack([{code, unavailable}]), State#?MODULE{timestamp=now()}, Timeout}
 			end
 	end;
 handle_message(Message, State=#?MODULE{session=undefined}) ->
@@ -107,9 +110,9 @@ handle_message(Message, State=#?MODULE{session=undefined}) ->
 	{stop, normal, State#?MODULE{timestamp=now()}};
 handle_message(Message=#mqtt_pingreq{}, State) ->
 	% Reflect ping and refresh timeout.
-	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
+	fubar_log:debug(?MODULE, [State#?MODULE.client_id, "=>", Message]),
 	Reply = #mqtt_pingresp{},
-	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Reply]),
+	fubar_log:debug(?MODULE, [State#?MODULE.client_id, "<=", Reply]),
 	{reply, Reply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout};
 handle_message(Message=#mqtt_publish{}, State=#?MODULE{session=Session}) ->
 	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
@@ -146,8 +149,7 @@ handle_message(Message=#mqtt_disconnect{}, State=#?MODULE{session=Session}) ->
 
 %% Fallback
 handle_message(Message, State) ->
-	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "=>", Message]),
-	fubar_log:warning(?MODULE, [State#?MODULE.client_id, Message, "unknown message"]),
+	fubar_log:warning(?MODULE, [State#?MODULE.client_id, "=>", Message, "unknown message"]),
 	{noreply, State#?MODULE{timestamp=now()}, State#?MODULE.timeout}.
 
 %% @doc Handle internal events from, supposedly, the session.
@@ -158,10 +160,10 @@ handle_message(Message, State) ->
 		  {stop, reason(), state()}.
 handle_event(timeout, State=#?MODULE{client_id=ClientId}) ->
 	% General timeout
-	fubar_log:debug(?MODULE, [ClientId, "timed out"]),
+	fubar_log:warning(?MODULE, [ClientId, "timed out"]),
 	{stop, normal, State};
 handle_event(Event, State=#?MODULE{session=undefined}) ->
-	fubar_log:warning(?MODULE, [State#?MODULE.client_id, "sessionless event", Event]),
+	fubar_log:error(?MODULE, [State#?MODULE.client_id, "sessionless event", Event]),
 	{noreply, State, timeout(State#?MODULE.timeout, State#?MODULE.timestamp)};
 handle_event(Event=#mqtt_publish{}, State) ->
 	fubar_log:protocol(?MODULE, [State#?MODULE.client_id, "<=", Event]),
@@ -220,6 +222,7 @@ bind_session(Message=#mqtt_connect{client_id=ClientId}, State) ->
 		   end,
 	case mqtt_session:bind(ClientId, Will) of
 		{ok, Session} ->
+			fubar_log:access(?MODULE, [ClientId, "session bound", Session]),
 			KeepAlive = determine_keep_alive(Message#mqtt_connect.keep_alive, State#?MODULE.valid_keep_alive),
 			% Set timeout as 1.5 times the keep-alive.
 			Timeout = KeepAlive*1500,
@@ -232,13 +235,15 @@ bind_session(Message=#mqtt_connect{client_id=ClientId}, State) ->
 				true -> mqtt_session:clean(Session);
 				_ -> ok
 			end,
+			fubar_log:protocol(?MODULE, [ClientId, "<=", Reply]),
 			{reply, Reply,
 			 State#?MODULE{client_id=ClientId, session=Session, timeout=Timeout, timestamp=now()}, Timeout};
 		Error ->
 			fubar_log:error(?MODULE, [ClientId, "session bind failure", Error]),
+			Reply = mqtt:connack([{code, unavailable}]),
+			fubar_log:protocol(?MODULE, [ClientId, "<=", Reply]),
 			% Timeout immediately to close just after reply.
-			{reply, mqtt:connack([{code, unavailable}]),
-			 State#?MODULE{client_id=ClientId, timestamp=now()}, 0}
+			{reply, Reply, State#?MODULE{client_id=ClientId, timestamp=now()}, State#?MODULE.timeout}
 	end.
 
 determine_keep_alive(Suggested, {Min, _}) when Suggested < Min ->

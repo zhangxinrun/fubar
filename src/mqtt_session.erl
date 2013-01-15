@@ -324,7 +324,7 @@ handle_info({retry, MessageId}, State=#?MODULE{client=undefined, buffer=Buffer, 
 					noreply(State#?MODULE{retry_pool=Pool})
 			end;
 		_ ->
-			fubar_log:log(warning, ?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
+			fubar_log:log(error, ?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
 			noreply(State)
 	end;
 handle_info({retry, MessageId}, State=#?MODULE{client=Client}) ->
@@ -342,7 +342,7 @@ handle_info({retry, MessageId}, State=#?MODULE{client=Client}) ->
 					noreply(State#?MODULE{retry_pool=Pool})
 			end;
 		_ ->
-			fubar_log:warning(?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
+			fubar_log:error(?MODULE, [State#?MODULE.name, "not found in retry pool", MessageId]),
 			noreply(State)
 	end;
 

@@ -127,13 +127,13 @@ init(State=#?MODULE{transport=Transport, socket=Socket}) ->
 		Module ->
 			case Module:verify(PeerAddr) of
 				ok ->
-					fubar_log:access(?MODULE, ["acl pass", PeerAddr]),
+					fubar_log:debug(?MODULE, ["acl pass", PeerAddr]),
 					server_init(State#?MODULE{socket_options=State#?MODULE.acl_socket_options,
 											  context=[{auth, undefined}]});
 				{error, not_found} ->
 					server_init(State);
 				{error, forbidden} ->
-					fubar_log:access(?MODULE, ["acl block", PeerAddr]),
+					fubar_log:warning(?MODULE, ["acl block", PeerAddr]),
 					Transport:close(Socket),
 					{ok, State#?MODULE{socket=undefined, timeout=0}, 0}
 			end
@@ -172,7 +172,7 @@ server_init(State=#?MODULE{transport=Transport, socket=Socket, socket_options=Op
 					case proplists:get_value(verify, Options) of
 						verify_peer ->
 							% The client is not certified and rejected.
-							fubar_log:access(?MODULE, ["ssl cert not ok", Error]),
+							fubar_log:warning(?MODULE, ["ssl cert not ok", Error]),
 							Transport:close(Socket),
 							{ok, NewState#?MODULE{socket=undefined, timeout=0}, 0};
 						_ ->
@@ -239,7 +239,7 @@ handle_cast(stop, State) ->
 
 %% Fallback
 handle_cast(Message, State=#?MODULE{timeout=Timeout}) ->
-	fubar_log:log(noise, ?MODULE, ["unknown cast", Message]),
+	fubar_log:log(debug, ?MODULE, ["unknown cast", Message]),
 	{noreply, State, Timeout}.
 
 % Ignore pointless message from the listener.

@@ -12,6 +12,7 @@
 %% Exported Functions
 %%
 -export([start/0, stop/0,						% application start/stop
+		 state/0,								% get application state
 		 settings/1, settings/2,				% application environment getter/setter
 		 create/1, set/2, get/2, timestamp/2,	% fubar message manipulation
 		 apply_all_module_attributes_of/1		% bootstrapping utility
@@ -53,7 +54,32 @@ start() ->
 -spec stop() -> ok | {error, reason()}.
 stop() ->
 	fubar_app:leave(),
-	application:stop(?MODULE).
+	application:stop(?MODULE),
+	wait_for_stop(),
+	halt().
+
+%% @doc Get application state.
+-spec state() -> term().
+state() ->
+	case lists:keyfind(?MODULE, 1, application:which_applications()) of
+		false ->
+			{error, "fubar not running"};
+		{Name, Desc, Version} ->
+			case catch supervisor:which_children(ranch_sup) of
+				{'EXIT', _} ->
+					{ok, [{name, Name}, {description, Desc}, {version, Version}]};
+				Ranch ->
+					Listeners = lists:foldl(fun({{ranch_listener_sup, Listener}, Pid, supervisor, _}, Acc) ->
+													[{Listener, Pid} | Acc];
+											   (_, Acc) ->
+													Acc
+											end, [], Ranch),
+					{ok, [{name, Name}, {description, Desc}, {version, Version},
+						  {listeners, listener_state(Listeners)},
+						  {memory, erlang:memory(total)},
+						  {memory_limit, vm_memory_monitor:get_memory_limit()}]}
+			end
+	end.
 
 %% @doc Get settings from the application metadata.
 %% @sample Props = fubar:settings(?MODULE).
@@ -210,6 +236,48 @@ replace({Key, Value}, [{Key, _} | Rest]) ->
 replace({Key, Value}, [NoMatch | Rest]) ->
 	[NoMatch | replace({Key, Value}, Rest)].
 
+listener_state([]) ->
+	[];
+listener_state([{Name, Listener} | Rest]) ->
+	case catch supervisor:which_children(Listener) of
+		{'EXIT', Reason} ->
+			[{Name, {error, Reason}} | listener_state(Rest)];
+		Children ->
+			[{Name, lists:foldl(fun({ranch_listener, Pid, worker, _}, Acc) ->
+										case ranch_listener:get_port(Pid) of
+											{ok, Port} ->
+												[{port, Port} | Acc];
+											Error ->
+												[{port, Error} | Acc]
+										end;
+								   ({ranch_acceptors_sup, Pid, supervisor, _}, Acc) ->
+										case catch supervisor:which_children(Pid) of
+											{'EXIT', Reason} ->
+												[{acceptors, {error, Reason}} | Acc];
+											Acceptors ->
+												[{acceptors, length(Acceptors)} | Acc]
+										end;
+								   ({ranch_conns_sup, Pid, supervisor, _}, Acc) ->
+										case catch supervisor:which_children(Pid) of
+											{'EXIT', Reason} ->
+												[{connections, {error, Reason}} | Acc];
+											Connections ->
+												[{connections, length(Connections)} | Acc]
+										end;
+								   (_, Acc) ->
+										Acc
+								end, [], Children)} | listener_state(Rest)]
+	end.
+
+wait_for_stop() ->
+	Applications = application:which_applications(),
+	case lists:keyfind(ranch, 1, Applications) of
+		false ->
+			ok;
+		_ ->
+			timer:sleep(1000),
+			wait_for_stop()
+	end.
 %%
 %% Tests
 %%
