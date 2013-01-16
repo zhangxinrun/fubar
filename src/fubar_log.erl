@@ -145,14 +145,14 @@ dump(Class, Filename) ->
 %% @doc Open a log class.
 -spec open(atom() | [atom()]) -> ok | {error, reason()}.
 open(Classes) when is_list(Classes) ->
-	lists:foreach(open, Classes);
+	lists:foreach(fun ?MODULE:open/1, Classes);
 open(Class) ->
 	gen_server:call(?MODULE, {open, Class}).
 
 %% @doc Close a log class.
 -spec close(atom()| [atom()]) -> ok.
 close(Classes) when is_list(Classes) ->
-	lists:foreach(open, Classes);
+	lists:foreach(fun ?MODULE:close/1, Classes);
 close(Class) ->
 	gen_server:call(?MODULE, {close, Class}).
 
